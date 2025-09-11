@@ -56,7 +56,7 @@ ROOT_URLCONF = "backend.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],  # you can keep templates here
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -96,7 +96,7 @@ USE_I18N = True
 USE_TZ = True
 
 
-# Static files
+# Static & Media files
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 MEDIA_URL = "/media/"
@@ -109,6 +109,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Custom user model
 AUTH_USER_MODEL = "accounts.User"
 
+
 # Django REST Framework & JWT
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -119,17 +120,28 @@ REST_FRAMEWORK = {
     ),
 }
 
+
+# Load JWT keys
+with open(BASE_DIR / "backend" / "private.pem", "rb") as f:
+    PRIVATE_KEY = f.read()
+
+with open(BASE_DIR / "backend" / "public.pem", "rb") as f:
+    PUBLIC_KEY = f.read()
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": True,
+    "ALGORITHM": "RS256",
+    "SIGNING_KEY": PRIVATE_KEY,
+    "VERIFYING_KEY": PUBLIC_KEY,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-# CORS (for development) - more secure than allowing all
+
+# CORS (for development)
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",  # React
 ]
-# If you need to allow cookies or other credentials:
 # CORS_ALLOW_CREDENTIALS = True
