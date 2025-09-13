@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.conf import settings
 
 
 class User(AbstractUser):
@@ -19,3 +20,47 @@ class User(AbstractUser):
     role = models.CharField(
         max_length=50, choices=Role.choices, default=Role.RECEPTION
     )
+
+
+class ClinicOwnerProfile(models.Model):
+    """
+    Profile for users with the CLINIC_OWNER role.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name='clinic_owner_profile',
+        limit_choices_to={'role': User.Role.CLINIC_OWNER}
+    )
+    clinic_owner_name = models.CharField(max_length=255)
+    clinic_name = models.CharField(max_length=255)
+    owner_phone_number = models.CharField(max_length=11, blank=True)
+    clinic_phone_number = models.CharField(max_length=11, blank=True)
+    location = models.CharField(max_length=255, blank=True)
+    email = models.EmailField(unique=True)
+
+    def __str__(self):
+        return f"{self.clinic_owner_name} - {self.clinic_name}"
+
+
+class SubscriptionType(models.Model):
+    """
+    Defines the types of subscriptions available (e.g., Basic, Premium).
+    """
+    name = models.CharField(max_length=100, unique=True)
+    price = models.DecimalField(max_digits=8, decimal_places=2)
+    duration_days = models.IntegerField(help_text="Duration of the subscription in days.")
+
+    def __str__(self):
+        return f"{self.name} - {self.price} for {self.duration_days} days"
+
+
+class PaymentMethod(models.Model):
+    """
+    Stores payment methods for clinic owners.
+    """
+    name = models.CharField(max_length=100, help_text="Name of the payment method (e.g., Visa, Cash)")
+
+    def __str__(self):
+        return self.name
