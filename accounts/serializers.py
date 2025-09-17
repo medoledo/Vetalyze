@@ -1,6 +1,6 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
-from .models import User, ClinicOwnerProfile, SubscriptionType, PaymentMethod
+from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -72,6 +72,29 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         instance.save()
 
         return instance
+
+
+class DoctorProfileSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = DoctorProfile
+        fields = '__all__'
+
+    def create(self, validated_data):
+        # This assumes user creation is handled separately or not needed at profile creation
+        # For simplicity, we're creating the profile for an existing DOCTOR user.
+        # You might want to expand this to create the user as well.
+        profile = DoctorProfile.objects.create(**validated_data)
+        return profile
+
+
+class ReceptionProfileSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = ReceptionProfile
+        fields = '__all__'
 
 
 class ChangePasswordSerializer(serializers.Serializer):

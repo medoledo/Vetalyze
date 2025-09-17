@@ -4,13 +4,17 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CustomTokenObtainPairView, 
     public_key_view,
-    ClinicOwnerProfileViewSet,
+    ClinicOwnerProfileViewSet, 
+    DoctorProfileViewSet, 
+    ReceptionProfileViewSet,
     SubscriptionTypeViewSet,
     PaymentMethodViewSet
 )
 
 router = DefaultRouter()
 router.register(r'clinic-owner-profiles', ClinicOwnerProfileViewSet)
+router.register(r'doctor-profiles', DoctorProfileViewSet)
+router.register(r'reception-profiles', ReceptionProfileViewSet)
 router.register(r'subscription-types', SubscriptionTypeViewSet)
 router.register(r'payment-methods', PaymentMethodViewSet)
 

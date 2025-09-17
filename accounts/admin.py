@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, ClinicOwnerProfile, SubscriptionType, PaymentMethod
+from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 
 
 class ClinicOwnerProfileInline(admin.StackedInline):
@@ -10,6 +10,24 @@ class ClinicOwnerProfileInline(admin.StackedInline):
     model = ClinicOwnerProfile
     can_delete = False
     verbose_name_plural = 'Clinic Owner Profile'
+
+
+class DoctorProfileInline(admin.StackedInline):
+    """
+    Allows editing of the DoctorProfile directly within the User admin page.
+    """
+    model = DoctorProfile
+    can_delete = False
+    verbose_name_plural = 'Doctor Profile'
+
+
+class ReceptionProfileInline(admin.StackedInline):
+    """
+    Allows editing of the ReceptionProfile directly within the User admin page.
+    """
+    model = ReceptionProfile
+    can_delete = False
+    verbose_name_plural = 'Reception Profile'
 
 
 class CustomUserAdmin(UserAdmin):
@@ -38,10 +56,16 @@ class CustomUserAdmin(UserAdmin):
         """
         if obj and obj.role == User.Role.CLINIC_OWNER:
             return [ClinicOwnerProfileInline]
+        if obj and obj.role == User.Role.DOCTOR:
+            return [DoctorProfileInline]
+        if obj and obj.role == User.Role.RECEPTION:
+            return [ReceptionProfileInline]
         return []
 
 
 admin.site.register(User, CustomUserAdmin)
 admin.site.register(ClinicOwnerProfile)
+admin.site.register(DoctorProfile)
+admin.site.register(ReceptionProfile)
 admin.site.register(SubscriptionType)
 admin.site.register(PaymentMethod)

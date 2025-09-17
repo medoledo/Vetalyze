@@ -7,7 +7,7 @@ class User(AbstractUser):
     """
     Custom User model inheriting from AbstractUser.
     This provides all the fields of the default User model,
-    plus any custom fields you add.
+    plus a 'role' field.
     """
     
     class Role(models.TextChoices):
@@ -43,6 +43,59 @@ class ClinicOwnerProfile(models.Model):
     def __str__(self):
         return f"{self.clinic_owner_name} - {self.clinic_name}"
 
+
+class DoctorProfile(models.Model):
+    """
+    Profile for users with the DOCTOR role.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name='doctor_profile',
+        limit_choices_to={'role': User.Role.DOCTOR}
+    )
+    clinic_owner_profile = models.ForeignKey(
+        ClinicOwnerProfile,
+        on_delete=models.CASCADE,
+        related_name='doctors'
+    )
+    full_name = models.CharField(max_length=255)
+    phone_number = models.CharField(max_length=11, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    birthday = models.DateField(null=True, blank=True)
+    joined_date = models.DateField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.full_name
+
+
+class ReceptionProfile(models.Model):
+    """
+    Profile for users with the RECEPTION role.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name='reception_profile',
+        limit_choices_to={'role': User.Role.RECEPTION}
+    )
+    clinic_owner_profile = models.ForeignKey(
+        ClinicOwnerProfile,
+        on_delete=models.CASCADE,
+        related_name='receptionists'
+    )
+    full_name = models.CharField(max_length=255)
+    phone_number = models.CharField(max_length=11, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    birthday = models.DateField(null=True, blank=True)
+    joined_date = models.DateField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.full_name
 
 class SubscriptionType(models.Model):
     """

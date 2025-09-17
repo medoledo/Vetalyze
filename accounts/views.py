@@ -5,8 +5,8 @@ from rest_framework.response import Response
 from rest_framework import viewsets, status
 from django.conf import settings
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer
-from .models import User, ClinicOwnerProfile, SubscriptionType, PaymentMethod
+from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer
+from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 from .permissions import IsSiteOwner , IsClinicOwner, IsDoctor, IsReception
 
 
@@ -80,6 +80,41 @@ class ClinicOwnerProfileViewSet(viewsets.ModelViewSet):
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+class DoctorProfileViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for Doctor Profiles.
+    - Clinic Owners can manage doctors within their clinic.
+    - Doctors can view their own profile.
+    """
+    queryset = DoctorProfile.objects.all()
+    serializer_class = DoctorProfileSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == User.Role.CLINIC_OWNER:
+            return DoctorProfile.objects.filter(clinic_owner_profile__user=user)
+        elif user.role == User.Role.DOCTOR:
+            return DoctorProfile.objects.filter(user=user)
+        return DoctorProfile.objects.none() # Or handle permissions differently
+
+
+class ReceptionProfileViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for Reception Profiles.
+    - Clinic Owners can manage receptionists within their clinic.
+    - Receptionists can view their own profile.
+    """
+    queryset = ReceptionProfile.objects.all()
+    serializer_class = ReceptionProfileSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == User.Role.CLINIC_OWNER:
+            return ReceptionProfile.objects.filter(clinic_owner_profile__user=user)
+        elif user.role == User.Role.RECEPTION:
+            return ReceptionProfile.objects.filter(user=user)
+        return ReceptionProfile.objects.none()
 
 class SubscriptionTypeViewSet(viewsets.ModelViewSet):
     queryset = SubscriptionType.objects.all()
