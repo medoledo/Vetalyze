@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
+from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 
 
 class ClinicOwnerProfileInline(admin.StackedInline):
@@ -69,3 +69,4 @@ admin.site.register(DoctorProfile)
 admin.site.register(ReceptionProfile)
 admin.site.register(SubscriptionType)
 admin.site.register(PaymentMethod)
+admin.site.register(Country)

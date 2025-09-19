@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.core.validators import MinValueValidator
 from django.conf import settings
 
 
@@ -22,6 +23,18 @@ class User(AbstractUser):
     )
 
 
+class Country(models.Model):
+    """
+    Stores country-specific settings and rules.
+    """
+    name = models.CharField(max_length=100, unique=True)
+    max_id_number = models.PositiveIntegerField(default=14, validators=[MinValueValidator(1)])
+    max_phone_number = models.PositiveIntegerField(default=11, validators=[MinValueValidator(1)])
+
+    def __str__(self):
+        return self.name
+
+
 class ClinicOwnerProfile(models.Model):
     """
     Profile for users with the CLINIC_OWNER role.
@@ -33,10 +46,12 @@ class ClinicOwnerProfile(models.Model):
         related_name='clinic_owner_profile',
         limit_choices_to={'role': User.Role.CLINIC_OWNER}
     )
+    country = models.ForeignKey(Country, on_delete=models.PROTECT, related_name='clinics')
     clinic_owner_name = models.CharField(max_length=255)
+    national_id = models.CharField(max_length=50, blank=True)
     clinic_name = models.CharField(max_length=255)
-    owner_phone_number = models.CharField(max_length=11, blank=True)
-    clinic_phone_number = models.CharField(max_length=11, blank=True)
+    owner_phone_number = models.CharField(max_length=20, blank=True) # Increased max_length for flexibility
+    clinic_phone_number = models.CharField(max_length=20, blank=True)
     location = models.CharField(max_length=255, blank=True)
     email = models.EmailField(unique=True)
 
@@ -61,7 +76,8 @@ class DoctorProfile(models.Model):
         related_name='doctors'
     )
     full_name = models.CharField(max_length=255)
-    phone_number = models.CharField(max_length=11, blank=True)
+    national_id = models.CharField(max_length=50, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
     address = models.CharField(max_length=255, blank=True)
     birthday = models.DateField(null=True, blank=True)
     joined_date = models.DateField(auto_now_add=True)
@@ -88,7 +104,8 @@ class ReceptionProfile(models.Model):
         related_name='receptionists'
     )
     full_name = models.CharField(max_length=255)
-    phone_number = models.CharField(max_length=11, blank=True)
+    national_id = models.CharField(max_length=50, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
     address = models.CharField(max_length=255, blank=True)
     birthday = models.DateField(null=True, blank=True)
     joined_date = models.DateField(auto_now_add=True)

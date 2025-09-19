@@ -1,6 +1,6 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
-from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
+from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -73,6 +73,27 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
 
         return instance
 
+    def validate(self, data):
+        """
+        Validate phone numbers against the country's max length.
+        """
+        country = data.get('country')
+        max_len = country.max_phone_number
+
+        owner_phone_number = data.get('owner_phone_number')
+        if owner_phone_number and len(owner_phone_number) > max_len:
+            raise serializers.ValidationError(f"Owner phone number cannot exceed {max_len} digits for {country.name}.")
+
+        clinic_phone_number = data.get('clinic_phone_number')
+        if clinic_phone_number and len(clinic_phone_number) > max_len:
+            raise serializers.ValidationError(f"Clinic phone number cannot exceed {max_len} digits for {country.name}.")
+
+        national_id = data.get('national_id')
+        max_id_len = country.max_id_number
+        if national_id and len(national_id) > max_id_len:
+            raise serializers.ValidationError(f"National ID cannot exceed {max_id_len} characters for {country.name}.")
+        return data
+
 
 class DoctorProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -88,6 +109,30 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
         profile = DoctorProfile.objects.create(**validated_data)
         return profile
 
+    def validate_phone_number(self, value):
+        """
+        Validate phone number against the country's max length.
+        """
+        # The clinic_owner_profile is passed in the data during creation
+        clinic_profile = self.initial_data.get('clinic_owner_profile')
+        if clinic_profile:
+            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
+            country = clinic.country
+            max_len = country.max_phone_number
+            if value and len(value) > max_len:
+                raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {country.name}.")
+        return value
+
+    def validate_national_id(self, value):
+        clinic_profile = self.initial_data.get('clinic_owner_profile')
+        if clinic_profile:
+            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
+            country = clinic.country
+            max_len = country.max_id_number
+            if value and len(value) > max_len:
+                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {country.name}.")
+        return value
+
 
 class ReceptionProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
@@ -95,6 +140,29 @@ class ReceptionProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReceptionProfile
         fields = '__all__'
+
+    def validate_phone_number(self, value):
+        """
+        Validate phone number against the country's max length.
+        """
+        clinic_profile = self.initial_data.get('clinic_owner_profile')
+        if clinic_profile:
+            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
+            country = clinic.country
+            max_len = country.max_phone_number
+            if value and len(value) > max_len:
+                raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {country.name}.")
+        return value
+
+    def validate_national_id(self, value):
+        clinic_profile = self.initial_data.get('clinic_owner_profile')
+        if clinic_profile:
+            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
+            country = clinic.country
+            max_len = country.max_id_number
+            if value and len(value) > max_len:
+                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {country.name}.")
+        return value
 
 
 class ChangePasswordSerializer(serializers.Serializer):

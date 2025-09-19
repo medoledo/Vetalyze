@@ -25,6 +25,7 @@ ALLOWED_HOSTS = [
 INSTALLED_APPS = [
     # Local apps
     "accounts",
+    "owners",
 
     # Third-party apps
     "rest_framework",
