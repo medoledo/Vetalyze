@@ -1,5 +1,6 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
+from django.contrib.auth import authenticate
 from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 
 
@@ -16,7 +17,30 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     def validate(self, attrs):
         data = super().validate(attrs)
-        data['role'] = self.user.role
+        user = self.user
+
+        # Check if the user's own account is active
+        if not user.is_active:
+            raise serializers.ValidationError("User account is inactive.", code='authorization')
+
+        # Check the clinic's active status for all clinic-related roles
+        clinic_is_active = True
+        if user.role == User.Role.CLINIC_OWNER:
+            if hasattr(user, 'clinic_owner_profile'):
+                clinic_is_active = user.clinic_owner_profile.is_active
+        elif user.role == User.Role.DOCTOR:
+            if hasattr(user, 'doctor_profile'):
+                clinic_is_active = user.doctor_profile.clinic_owner_profile.is_active
+        elif user.role == User.Role.RECEPTION:
+            if hasattr(user, 'reception_profile'):
+                clinic_is_active = user.reception_profile.clinic_owner_profile.is_active
+
+        if not clinic_is_active:
+            raise serializers.ValidationError(
+                "The clinic this account is associated with is inactive. Please contact support.", code='authorization'
+            )
+
+        data['role'] = user.role
         return data
 
 
@@ -35,12 +59,48 @@ class UserSerializer(serializers.ModelSerializer):
         return user
 
 
+class CountrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Country
+        fields = '__all__'
+
+
+class PaymentMethodSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentMethod
+        fields = '__all__'
+
+
+class SubscriptionTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SubscriptionType
+        fields = '__all__'
+
+
 class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer()
+    country = CountrySerializer(read_only=True)
+    country_id = serializers.PrimaryKeyRelatedField(
+        queryset=Country.objects.all(), source='country', write_only=True
+    )
+    subscription_type = SubscriptionTypeSerializer(read_only=True)
+    subscription_type_id = serializers.PrimaryKeyRelatedField(
+        queryset=SubscriptionType.objects.all(), source='subscription_type', write_only=True, allow_null=True
+    )
+    payment_method = PaymentMethodSerializer(read_only=True)
+    payment_method_id = serializers.PrimaryKeyRelatedField(
+        queryset=PaymentMethod.objects.all(), source='payment_method', write_only=True, allow_null=True
+    )
 
     class Meta:
         model = ClinicOwnerProfile
-        fields = '__all__'
+        fields = [
+            'user', 'country', 'country_id', 'clinic_owner_name', 'national_id', 
+            'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location', 
+            'email', 'is_active', 'subscription_type', 'subscription_type_id', 'amount_paid', 
+            'payment_method', 'payment_method_id', 'subscription_start_date', 
+            'subscription_end_date'
+        ]
 
     def create(self, validated_data):
         user_data = validated_data.pop('user')
@@ -74,6 +134,7 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         instance.payment_method = validated_data.get('payment_method', instance.payment_method)
         instance.subscription_start_date = validated_data.get('subscription_start_date', instance.subscription_start_date)
         instance.subscription_end_date = validated_data.get('subscription_end_date', instance.subscription_end_date)
+        instance.is_active = validated_data.get('is_active', instance.is_active)
         instance.save()
 
         return instance
@@ -82,7 +143,11 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         """
         Validate phone numbers against the country's max length.
         """
-        country = data.get('country')
+        # On create, country is in data. On update, it's on the instance.
+        country = data.get('country') or (self.instance and self.instance.country)
+        if not country:
+            # This can happen on create if country_id is not provided.
+            raise serializers.ValidationError("Country is required.")
         max_len = country.max_phone_number
 
         owner_phone_number = data.get('owner_phone_number')
@@ -192,15 +257,3 @@ class ChangePasswordSerializer(serializers.Serializer):
             if not user.check_password(value):
                 raise serializers.ValidationError("Current password is not correct.")
         return value
-
-
-class SubscriptionTypeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SubscriptionType
-        fields = '__all__'
-
-
-class PaymentMethodSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PaymentMethod
-        fields = '__all__'

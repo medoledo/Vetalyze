@@ -9,7 +9,7 @@ class ClinicOwnerProfileInline(admin.StackedInline):
     """
     model = ClinicOwnerProfile
     can_delete = False
-    verbose_name_plural = 'Clinic Owner Profile'
+    fields = ('clinic_owner_name', 'national_id', 'clinic_name', 'country', 'is_active', 'owner_phone_number', 'clinic_phone_number', 'location', 'email', 'subscription_type', 'amount_paid', 'payment_method', 'subscription_start_date', 'subscription_end_date')
 
 
 class DoctorProfileInline(admin.StackedInline):

@@ -50,7 +50,7 @@ class ClinicOwnerProfile(models.Model):
     clinic_owner_name = models.CharField(max_length=255)
     national_id = models.CharField(max_length=50, blank=True)
     clinic_name = models.CharField(max_length=255)
-    owner_phone_number = models.CharField(max_length=20, blank=True) # Increased max_length for flexibility
+    owner_phone_number = models.CharField(max_length=20, blank=True) 
     clinic_phone_number = models.CharField(max_length=20, blank=True)
     location = models.CharField(max_length=255, blank=True)
     email = models.EmailField(unique=True)
@@ -60,6 +60,7 @@ class ClinicOwnerProfile(models.Model):
     payment_method = models.ForeignKey('PaymentMethod', on_delete=models.SET_NULL, null=True, blank=True)
     subscription_start_date = models.DateField(null=True, blank=True)
     subscription_end_date = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return f"{self.clinic_owner_name} - {self.clinic_name}"
@@ -69,37 +70,9 @@ class ClinicOwnerProfile(models.Model):
         unique_together = ('country', 'national_id')
 
 
-class StaffProfile(models.Model):
+class DoctorProfile(models.Model):
     """
-    Abstract base model for staff members like Doctors and Receptionists.
-    It contains all the common fields.
-    """
-    clinic_owner_profile = models.ForeignKey(
-        ClinicOwnerProfile,
-        on_delete=models.CASCADE,
-        # This will create 'doctors' and 'receptionists' related_names automatically
-        related_name="%(class)ss"
-    )
-    full_name = models.CharField(max_length=255)
-    national_id = models.CharField(max_length=50, blank=True)
-    phone_number = models.CharField(max_length=20, blank=True)
-    address = models.CharField(max_length=255, blank=True)
-    birthday = models.DateField(null=True, blank=True)
-    joined_date = models.DateField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        abstract = True
-        # Ensures national_id is unique per clinic.
-        unique_together = ('clinic_owner_profile', 'national_id')
-
-    def __str__(self):
-        return self.full_name
-
-
-class DoctorProfile(StaffProfile):
-    """
-    Profile for users with the DOCTOR role. Inherits from StaffProfile.
+    Profile for users with the DOCTOR role.
     """
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -108,12 +81,31 @@ class DoctorProfile(StaffProfile):
         related_name='doctor_profile',
         limit_choices_to={'role': User.Role.DOCTOR}
     )
+    clinic_owner_profile = models.ForeignKey(
+        ClinicOwnerProfile,
+        on_delete=models.CASCADE,
+        related_name='doctors'
+    )
+    full_name = models.CharField(max_length=255)
+    national_id = models.CharField(max_length=50, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    birthday = models.DateField(null=True, blank=True)
+    joined_date = models.DateField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
     # You can add any doctor-specific fields here in the future.
 
+    class Meta:
+        # Ensures national_id is unique per clinic.
+        unique_together = ('clinic_owner_profile', 'national_id')
 
-class ReceptionProfile(StaffProfile):
+    def __str__(self):
+        return self.full_name
+
+
+class ReceptionProfile(models.Model):
     """
-    Profile for users with the RECEPTION role. Inherits from StaffProfile.
+    Profile for users with the RECEPTION role.
     """
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -122,7 +114,26 @@ class ReceptionProfile(StaffProfile):
         related_name='reception_profile',
         limit_choices_to={'role': User.Role.RECEPTION}
     )
+    clinic_owner_profile = models.ForeignKey(
+        ClinicOwnerProfile,
+        on_delete=models.CASCADE,
+        related_name='receptionists'
+    )
+    full_name = models.CharField(max_length=255)
+    national_id = models.CharField(max_length=50, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    birthday = models.DateField(null=True, blank=True)
+    joined_date = models.DateField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
     # You can add any reception-specific fields here in the future.
+
+    class Meta:
+        # Ensures national_id is unique per clinic.
+        unique_together = ('clinic_owner_profile', 'national_id')
+
+    def __str__(self):
+        return self.full_name
 
 
 class SubscriptionType(models.Model):
