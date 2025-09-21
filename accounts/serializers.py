@@ -69,6 +69,11 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         instance.clinic_phone_number = validated_data.get('clinic_phone_number', instance.clinic_phone_number)
         instance.location = validated_data.get('location', instance.location)
         instance.email = validated_data.get('email', instance.email)
+        instance.subscription_type = validated_data.get('subscription_type', instance.subscription_type)
+        instance.amount_paid = validated_data.get('amount_paid', instance.amount_paid)
+        instance.payment_method = validated_data.get('payment_method', instance.payment_method)
+        instance.subscription_start_date = validated_data.get('subscription_start_date', instance.subscription_start_date)
+        instance.subscription_end_date = validated_data.get('subscription_end_date', instance.subscription_end_date)
         instance.save()
 
         return instance
