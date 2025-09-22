@@ -81,14 +81,16 @@ class SubscriptionTypeSerializer(serializers.ModelSerializer):
 class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer()
     country = CountrySerializer(read_only=True)
+    subscription_type = SubscriptionTypeSerializer(read_only=True)
+    payment_method = PaymentMethodSerializer(read_only=True)
+    
+    # These fields are used for writing data (create/update) but won't be shown in the response.
     country_id = serializers.PrimaryKeyRelatedField(
         queryset=Country.objects.all(), source='country', write_only=True
     )
-    subscription_type = SubscriptionTypeSerializer(read_only=True)
     subscription_type_id = serializers.PrimaryKeyRelatedField(
-        queryset=SubscriptionType.objects.all(), source='subscription_type', write_only=True, allow_null=True
+        queryset=SubscriptionType.objects.all(), source='subscription_type', write_only=True, allow_null=True, required=False
     )
-    payment_method = PaymentMethodSerializer(read_only=True)
     payment_method_id = serializers.PrimaryKeyRelatedField(
         queryset=PaymentMethod.objects.all(), source='payment_method', write_only=True, allow_null=True
     )
@@ -97,10 +99,9 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         model = ClinicOwnerProfile
         fields = [
             'user', 'country', 'country_id', 'clinic_owner_name', 'national_id', 
-            'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location', 
-            'email', 'is_active', 'subscription_type', 'subscription_type_id', 'amount_paid', 
-            'payment_method', 'payment_method_id', 'subscription_start_date',
-            'website_url', 'facebook_url', 'instagram_url', 'tiktok_url',
+            'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location', 'email', 
+            'is_active', 'subscription_type', 'amount_paid', 'payment_method', 
+            'subscription_start_date', 'website_url', 'facebook_url', 'instagram_url', 'tiktok_url',
             'subscription_end_date'
         ]
         read_only_fields = [
