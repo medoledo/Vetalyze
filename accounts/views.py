@@ -1,11 +1,11 @@
 from django.shortcuts import render
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework import generics, views, status
 from rest_framework.response import Response
-from rest_framework import viewsets, status
 from django.conf import settings
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer
+from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, ClinicSubscriptionSerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer
 from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 from .permissions import IsSiteOwner , IsClinicOwner, IsDoctor, IsReception
 
@@ -24,104 +24,162 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
 
-class ClinicOwnerProfileViewSet(viewsets.ModelViewSet):
+class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
     """
-    API endpoint for Clinic Owner Profiles.
-    - Site Owners can list, retrieve, and create profiles.
-    - Clinic Owners can retrieve their own profile and change their password.
-    - A '/me/' endpoint is available for a clinic owner to access their own profile data.
+    - Site Owners can list all clinic profiles.
+    - Site Owners can create a new clinic profile.
     """
+    permission_classes = [IsSiteOwner]
     queryset = ClinicOwnerProfile.objects.all()
     serializer_class = ClinicOwnerProfileSerializer
 
-    def get_permissions(self):
-        """
-        Instantiates and returns the list of permissions that this view requires.
-        """
-        if self.action in ['create', 'list', 'update', 'partial_update', 'destroy']:
-            self.permission_classes = [IsSiteOwner]
-        elif self.action == 'change_password':
-            self.permission_classes = [IsSiteOwner | IsClinicOwner]
-        elif self.action in ['retrieve', 'me']:
-            # Allow SiteOwner OR ClinicOwner for retrieve actions.
-            # The object-level permission will ensure clinic owners can only see/edit their own.
-            self.permission_classes = [IsSiteOwner | IsClinicOwner]
-        else:
-            # Default to deny for any other actions like 'destroy'.
-            self.permission_classes = [IsAdminUser]
-        return super(ClinicOwnerProfileViewSet, self).get_permissions()
+
+class ClinicOwnerProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    - Site Owners can retrieve, update, or delete any clinic profile.
+    - Clinic Owners can retrieve their own profile.
+    """
+    permission_classes = [IsSiteOwner | IsClinicOwner]
+    queryset = ClinicOwnerProfile.objects.all()
+    serializer_class = ClinicOwnerProfileSerializer
 
     def get_object(self):
-        """
-        For detail views, ensure clinic owners can only access their own profile.
-        """
         obj = super().get_object()
-        if self.request.user.role == User.Role.CLINIC_OWNER and obj.user != self.request.user:
-            self.permission_denied(self.request)
+        user = self.request.user
+        if user.role == User.Role.CLINIC_OWNER and obj.user != user:
+            self.permission_denied(self.request, message='You can only view your own profile.')
         return obj
 
-    @action(detail=False, methods=['get'], url_path='me')
-    def me(self, request, *args, **kwargs):
-        # A clinic owner can only view their own profile data via this endpoint.
-        self.kwargs['pk'] = request.user.pk
-        return self.retrieve(request, *args, **kwargs)
+    def perform_update(self, serializer):
+        if self.request.user.role != User.Role.SITE_OWNER:
+            self.permission_denied(self.request, message='You do not have permission to edit this profile.')
+        serializer.save()
 
-    @action(detail=True, methods=['post'], url_path='change-password')
-    def change_password(self, request, pk=None):
-        profile = self.get_object()
+    def perform_destroy(self, instance):
+        if self.request.user.role != User.Role.SITE_OWNER:
+            self.permission_denied(self.request, message='You do not have permission to delete this profile.')
+        # The user is deleted via the on_delete=CASCADE on the profile's user field
+        instance.delete()
+
+
+class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
+    """
+    An endpoint for a clinic owner to access their own profile data.
+    """
+    permission_classes = [IsClinicOwner]
+    serializer_class = ClinicOwnerProfileSerializer
+
+    def get_object(self):
+        return self.request.user.clinic_owner_profile
+
+
+class ChangePasswordView(views.APIView):
+    """
+    An endpoint for changing a user's password.
+    """
+    permission_classes = [IsSiteOwner | IsClinicOwner]
+
+    def post(self, request, *args, **kwargs):
+        profile = ClinicOwnerProfile.objects.get(pk=self.kwargs['pk'])
         user_to_update = profile.user
-        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
 
+        # Security check
+        if request.user.role == User.Role.CLINIC_OWNER and user_to_update != request.user:
+            return Response({'error': 'You can only change your own password.'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            # The serializer's validation checks the current_password if required.
             user_to_update.set_password(serializer.validated_data['new_password'])
             user_to_update.save()
             return Response({'status': 'password set'}, status=status.HTTP_200_OK)
-
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class DoctorProfileViewSet(viewsets.ModelViewSet):
+class ActivateSubscriptionView(views.APIView):
     """
-    API endpoint for Doctor Profiles.
-    - Clinic Owners can manage doctors within their clinic.
-    - Doctors can view their own profile.
+    Activates a clinic's subscription. Sets the plan, payment, and makes the clinic active.
     """
-    queryset = DoctorProfile.objects.all()
+    permission_classes = [IsSiteOwner]
+
+    def post(self, request, *args, **kwargs):
+        profile = ClinicOwnerProfile.objects.get(pk=self.kwargs['pk'])
+        serializer = ClinicSubscriptionSerializer(instance=profile, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            full_profile_serializer = ClinicOwnerProfileSerializer(profile)
+            return Response(full_profile_serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DoctorProfileListCreateView(generics.ListCreateAPIView):
+    permission_classes = [IsClinicOwner]
+    serializer_class = DoctorProfileSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['clinic_owner_profile'] = self.request.user.clinic_owner_profile
+        return context
+
+    def get_queryset(self):
+        return DoctorProfile.objects.filter(clinic_owner_profile=self.request.user.clinic_owner_profile)
+
+
+class DoctorProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsClinicOwner | IsDoctor]
     serializer_class = DoctorProfileSerializer
 
     def get_queryset(self):
         user = self.request.user
         if user.role == User.Role.CLINIC_OWNER:
-            return DoctorProfile.objects.filter(clinic_owner_profile__user=user)
+            return DoctorProfile.objects.filter(clinic_owner_profile=user.clinic_owner_profile)
         elif user.role == User.Role.DOCTOR:
             return DoctorProfile.objects.filter(user=user)
-        return DoctorProfile.objects.none() # Or handle permissions differently
+        return DoctorProfile.objects.none()
 
 
-class ReceptionProfileViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint for Reception Profiles.
-    - Clinic Owners can manage receptionists within their clinic.
-    - Receptionists can view their own profile.
-    """
-    queryset = ReceptionProfile.objects.all()
+class ReceptionProfileListCreateView(generics.ListCreateAPIView):
+    permission_classes = [IsClinicOwner]
+    serializer_class = ReceptionProfileSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['clinic_owner_profile'] = self.request.user.clinic_owner_profile
+        return context
+
+    def get_queryset(self):
+        return ReceptionProfile.objects.filter(clinic_owner_profile=self.request.user.clinic_owner_profile)
+
+
+class ReceptionProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsClinicOwner | IsReception]
     serializer_class = ReceptionProfileSerializer
 
     def get_queryset(self):
         user = self.request.user
         if user.role == User.Role.CLINIC_OWNER:
-            return ReceptionProfile.objects.filter(clinic_owner_profile__user=user)
+            return ReceptionProfile.objects.filter(clinic_owner_profile=user.clinic_owner_profile)
         elif user.role == User.Role.RECEPTION:
             return ReceptionProfile.objects.filter(user=user)
         return ReceptionProfile.objects.none()
 
-class SubscriptionTypeViewSet(viewsets.ModelViewSet):
+
+class SubscriptionTypeListCreateView(generics.ListCreateAPIView):
     queryset = SubscriptionType.objects.all()
     serializer_class = SubscriptionTypeSerializer
     permission_classes = [IsSiteOwner] # Only Site Owners can manage subscription types
 
-class PaymentMethodViewSet(viewsets.ModelViewSet):
+class SubscriptionTypeDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = SubscriptionType.objects.all()
+    serializer_class = SubscriptionTypeSerializer
+    permission_classes = [IsSiteOwner]
+
+
+class PaymentMethodListCreateView(generics.ListCreateAPIView):
     queryset = PaymentMethod.objects.all()
     serializer_class = PaymentMethodSerializer
     permission_classes = [IsSiteOwner] # Only Site Owners can manage payment methods
+
+class PaymentMethodDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = PaymentMethod.objects.all()
+    serializer_class = PaymentMethodSerializer
+    permission_classes = [IsSiteOwner]

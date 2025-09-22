@@ -4,7 +4,7 @@ import uuid
 
 # Create your models here.
 
-class SocialMedia(models.Model):
+class MarketingChannel(models.Model):
     """
     Stores the different social media platforms or other channels
     where a client might have heard about the clinic.
@@ -32,7 +32,7 @@ class Owner(models.Model):
     phone_number = models.CharField(max_length=20)
     second_phone_number = models.CharField(max_length=20, blank=True, null=True)
     code = models.CharField(max_length=7, unique=True, editable=False)
-    knew_us_from = models.ForeignKey(SocialMedia, on_delete=models.SET_NULL, null=True, blank=True)
+    knew_us_from = models.ForeignKey(MarketingChannel, on_delete=models.SET_NULL, null=True, blank=True)
 
     def save(self, *args, **kwargs):
         if not self.code:

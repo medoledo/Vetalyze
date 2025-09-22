@@ -1,14 +1,14 @@
 from rest_framework import serializers
-from .models import Owner, Pet, PetType, SocialMedia
+from .models import Owner, Pet, PetType, MarketingChannel
 
 class PetTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = PetType
         fields = '__all__'
 
-class SocialMediaSerializer(serializers.ModelSerializer):
+class MarketingChannelSerializer(serializers.ModelSerializer):
     class Meta:
-        model = SocialMedia
+        model = MarketingChannel
         fields = '__all__'
 
 class PetSerializer(serializers.ModelSerializer):

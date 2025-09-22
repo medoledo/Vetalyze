@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Owner, Pet, PetType, SocialMedia
+from .models import Owner, Pet, PetType, MarketingChannel
 
 # Register your models here.
 
@@ -15,4 +15,4 @@ class OwnerAdmin(admin.ModelAdmin):
     inlines = [PetInline]
 
 admin.site.register(PetType)
-admin.site.register(SocialMedia)
+admin.site.register(MarketingChannel)

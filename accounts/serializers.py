@@ -1,5 +1,6 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
+from datetime import date
 from django.contrib.auth import authenticate
 from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
 
@@ -98,8 +99,13 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
             'user', 'country', 'country_id', 'clinic_owner_name', 'national_id', 
             'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location', 
             'email', 'is_active', 'subscription_type', 'subscription_type_id', 'amount_paid', 
-            'payment_method', 'payment_method_id', 'subscription_start_date', 
+            'payment_method', 'payment_method_id', 'subscription_start_date',
+            'website_url', 'facebook_url', 'instagram_url', 'tiktok_url',
             'subscription_end_date'
+        ]
+        read_only_fields = [
+            'is_active', 'subscription_type', 'amount_paid', 'payment_method', 
+            'subscription_start_date', 'subscription_end_date'
         ]
 
     def create(self, validated_data):
@@ -115,26 +121,13 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         # This update method is only for Site Owners to update profile details.
         # Password changes are handled by a separate endpoint.
-        user = self.context['request'].user
-        if user.role != User.Role.SITE_OWNER:
-            raise serializers.ValidationError("You do not have permission to edit profile details.")
-
         # Prevent changing the user or password via this method.
         validated_data.pop('user', None)
 
-        # Update ClinicOwnerProfile fields
-        instance.clinic_owner_name = validated_data.get('clinic_owner_name', instance.clinic_owner_name)
-        instance.clinic_name = validated_data.get('clinic_name', instance.clinic_name)
-        instance.owner_phone_number = validated_data.get('owner_phone_number', instance.owner_phone_number)
-        instance.clinic_phone_number = validated_data.get('clinic_phone_number', instance.clinic_phone_number)
-        instance.location = validated_data.get('location', instance.location)
-        instance.email = validated_data.get('email', instance.email)
-        instance.subscription_type = validated_data.get('subscription_type', instance.subscription_type)
-        instance.amount_paid = validated_data.get('amount_paid', instance.amount_paid)
-        instance.payment_method = validated_data.get('payment_method', instance.payment_method)
-        instance.subscription_start_date = validated_data.get('subscription_start_date', instance.subscription_start_date)
-        instance.subscription_end_date = validated_data.get('subscription_end_date', instance.subscription_end_date)
-        instance.is_active = validated_data.get('is_active', instance.is_active)
+        # Update fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+            
         instance.save()
 
         return instance
@@ -165,6 +158,34 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         return data
 
 
+class ClinicSubscriptionSerializer(serializers.Serializer):
+    """
+    Serializer for activating a clinic's subscription.
+    """
+    subscription_type_id = serializers.PrimaryKeyRelatedField(
+        queryset=SubscriptionType.objects.all(), source='subscription_type', write_only=True
+    )
+    payment_method_id = serializers.PrimaryKeyRelatedField(
+        queryset=PaymentMethod.objects.all(), source='payment_method', write_only=True
+    )
+    amount_paid = serializers.DecimalField(max_digits=8, decimal_places=2)
+
+    def update(self, instance, validated_data):
+        """
+        Activates the clinic by setting subscription details.
+        """
+        instance.subscription_type = validated_data.get('subscription_type')
+        instance.payment_method = validated_data.get('payment_method')
+        instance.amount_paid = validated_data.get('amount_paid')
+        
+        # Set automatic fields
+        instance.subscription_start_date = date.today()
+        instance.is_active = True
+        
+        instance.save() # The model's save() method will calculate the end_date
+        return instance
+
+
 class DoctorProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
 
@@ -183,24 +204,19 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
         """
         Validate phone number against the country's max length.
         """
-        # The clinic_owner_profile is passed in the data during creation
-        clinic_profile = self.initial_data.get('clinic_owner_profile')
-        if clinic_profile:
-            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
-            country = clinic.country
-            max_len = country.max_phone_number
-            if value and len(value) > max_len:
-                raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {country.name}.")
+        clinic_profile = self.context.get('clinic_owner_profile')
+        if clinic_profile and value:
+            max_len = clinic_profile.country.max_phone_number
+            if len(value) > max_len:
+                raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {clinic_profile.country.name}.")
         return value
 
     def validate_national_id(self, value):
-        clinic_profile = self.initial_data.get('clinic_owner_profile')
-        if clinic_profile:
-            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
-            country = clinic.country
-            max_len = country.max_id_number
-            if value and len(value) > max_len:
-                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {country.name}.")
+        clinic_profile = self.context.get('clinic_owner_profile')
+        if clinic_profile and value:
+            max_len = clinic_profile.country.max_id_number
+            if len(value) > max_len:
+                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {clinic_profile.country.name}.")
         return value
 
 
@@ -215,23 +231,19 @@ class ReceptionProfileSerializer(serializers.ModelSerializer):
         """
         Validate phone number against the country's max length.
         """
-        clinic_profile = self.initial_data.get('clinic_owner_profile')
-        if clinic_profile:
-            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
-            country = clinic.country
-            max_len = country.max_phone_number
-            if value and len(value) > max_len:
-                raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {country.name}.")
+        clinic_profile = self.context.get('clinic_owner_profile')
+        if clinic_profile and value:
+            max_len = clinic_profile.country.max_phone_number
+            if len(value) > max_len:
+                raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {clinic_profile.country.name}.")
         return value
 
     def validate_national_id(self, value):
-        clinic_profile = self.initial_data.get('clinic_owner_profile')
-        if clinic_profile:
-            clinic = ClinicOwnerProfile.objects.get(pk=clinic_profile)
-            country = clinic.country
-            max_len = country.max_id_number
-            if value and len(value) > max_len:
-                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {country.name}.")
+        clinic_profile = self.context.get('clinic_owner_profile')
+        if clinic_profile and value:
+            max_len = clinic_profile.country.max_id_number
+            if len(value) > max_len:
+                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {clinic_profile.country.name}.")
         return value
 
 

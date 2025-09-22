@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from datetime import timedelta
 from django.core.validators import MinValueValidator
 from django.conf import settings
 
@@ -60,7 +61,23 @@ class ClinicOwnerProfile(models.Model):
     payment_method = models.ForeignKey('PaymentMethod', on_delete=models.SET_NULL, null=True, blank=True)
     subscription_start_date = models.DateField(null=True, blank=True)
     subscription_end_date = models.DateField(null=True, blank=True)
-    is_active = models.BooleanField(default=True)
+    # Clinic Social Media Links
+    website_url = models.URLField(max_length=200, blank=True)
+    facebook_url = models.URLField(max_length=200, blank=True)
+    instagram_url = models.URLField(max_length=200, blank=True)
+    tiktok_url = models.URLField(max_length=200, blank=True)
+    is_active = models.BooleanField(default=False)
+
+    def save(self, *args, **kwargs):
+        """
+        Automatically calculate the subscription end date upon saving.
+        """
+        if self.subscription_type and self.subscription_start_date:
+            self.subscription_end_date = self.subscription_start_date + timedelta(
+                days=self.subscription_type.duration_days
+            )
+        
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.clinic_owner_name} - {self.clinic_name}"
@@ -143,6 +160,7 @@ class SubscriptionType(models.Model):
     name = models.CharField(max_length=100, unique=True)
     price = models.DecimalField(max_digits=8, decimal_places=2)
     duration_days = models.IntegerField(help_text="Duration of the subscription in days.")
+    allowed_accounts = models.PositiveIntegerField(default=5, help_text="Total number of Doctor/Reception accounts allowed.")
 
     def __str__(self):
         return f"{self.name} - {self.price} for {self.duration_days} days"
