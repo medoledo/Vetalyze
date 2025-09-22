@@ -42,6 +42,20 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
 
         data['role'] = user.role
+
+        # Add clinic_name to the response data
+        clinic_name = "Vetalyze" # Default for Admin/Site Owner
+        if user.role == User.Role.CLINIC_OWNER:
+            if hasattr(user, 'clinic_owner_profile'):
+                clinic_name = user.clinic_owner_profile.clinic_name
+        elif user.role == User.Role.DOCTOR:
+            if hasattr(user, 'doctor_profile'):
+                clinic_name = user.doctor_profile.clinic_owner_profile.clinic_name
+        elif user.role == User.Role.RECEPTION:
+            if hasattr(user, 'reception_profile'):
+                clinic_name = user.reception_profile.clinic_owner_profile.clinic_name
+        
+        data['clinic_name'] = clinic_name
         return data
 
 
