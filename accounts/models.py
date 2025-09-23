@@ -49,7 +49,6 @@ class ClinicOwnerProfile(models.Model):
     )
     country = models.ForeignKey(Country, on_delete=models.PROTECT, related_name='clinics')
     clinic_owner_name = models.CharField(max_length=255)
-    national_id = models.CharField(max_length=50, blank=True)
     clinic_name = models.CharField(max_length=255)
     owner_phone_number = models.CharField(max_length=20, blank=True) 
     clinic_phone_number = models.CharField(max_length=20, blank=True)
@@ -61,11 +60,8 @@ class ClinicOwnerProfile(models.Model):
     payment_method = models.ForeignKey('PaymentMethod', on_delete=models.SET_NULL, null=True, blank=True)
     subscription_start_date = models.DateField(null=True, blank=True)
     subscription_end_date = models.DateField(null=True, blank=True)
-    # Clinic Social Media Links
-    website_url = models.URLField(max_length=200, blank=True)
-    facebook_url = models.URLField(max_length=200, blank=True)
-    instagram_url = models.URLField(max_length=200, blank=True)
-    tiktok_url = models.URLField(max_length=200, blank=True)
+    # Other details
+    joined_date = models.DateField(auto_now_add=True)
     is_active = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
@@ -81,10 +77,6 @@ class ClinicOwnerProfile(models.Model):
 
     def __str__(self):
         return f"{self.clinic_owner_name} - {self.clinic_name}"
-
-    class Meta:
-        # Ensures that a national_id is unique within a given country.
-        unique_together = ('country', 'national_id')
 
 
 class DoctorProfile(models.Model):
@@ -104,17 +96,9 @@ class DoctorProfile(models.Model):
         related_name='doctors'
     )
     full_name = models.CharField(max_length=255)
-    national_id = models.CharField(max_length=50, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
-    address = models.CharField(max_length=255, blank=True)
-    birthday = models.DateField(null=True, blank=True)
     joined_date = models.DateField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
-    # You can add any doctor-specific fields here in the future.
-
-    class Meta:
-        # Ensures national_id is unique per clinic.
-        unique_together = ('clinic_owner_profile', 'national_id')
 
     def __str__(self):
         return self.full_name
@@ -137,17 +121,9 @@ class ReceptionProfile(models.Model):
         related_name='receptionists'
     )
     full_name = models.CharField(max_length=255)
-    national_id = models.CharField(max_length=50, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
-    address = models.CharField(max_length=255, blank=True)
-    birthday = models.DateField(null=True, blank=True)
     joined_date = models.DateField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
-    # You can add any reception-specific fields here in the future.
-
-    class Meta:
-        # Ensures national_id is unique per clinic.
-        unique_together = ('clinic_owner_profile', 'national_id')
 
     def __str__(self):
         return self.full_name

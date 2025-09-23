@@ -112,15 +112,14 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClinicOwnerProfile
         fields = [
-            'user', 'country', 'country_id', 'clinic_owner_name', 'national_id', 
+            'user', 'country', 'country_id', 'clinic_owner_name',
             'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location', 'email', 
             'is_active', 'subscription_type', 'amount_paid', 'payment_method', 
-            'subscription_start_date', 'website_url', 'facebook_url', 'instagram_url', 'tiktok_url',
-            'subscription_end_date'
+            'subscription_start_date', 'subscription_end_date', 'joined_date'
         ]
         read_only_fields = [
             'is_active', 'subscription_type', 'amount_paid', 'payment_method', 
-            'subscription_start_date', 'subscription_end_date'
+            'subscription_start_date', 'subscription_end_date', 'joined_date'
         ]
 
     def create(self, validated_data):
@@ -166,10 +165,6 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         if clinic_phone_number and len(clinic_phone_number) > max_len:
             raise serializers.ValidationError(f"Clinic phone number cannot exceed {max_len} digits for {country.name}.")
 
-        national_id = data.get('national_id')
-        max_id_len = country.max_id_number
-        if national_id and len(national_id) > max_id_len:
-            raise serializers.ValidationError(f"National ID cannot exceed {max_id_len} characters for {country.name}.")
         return data
 
 
@@ -208,13 +203,6 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
         model = DoctorProfile
         fields = '__all__'
 
-    def create(self, validated_data):
-        # This assumes user creation is handled separately or not needed at profile creation
-        # For simplicity, we're creating the profile for an existing DOCTOR user.
-        # You might want to expand this to create the user as well.
-        profile = DoctorProfile.objects.create(**validated_data)
-        return profile
-
     def validate_phone_number(self, value):
         """
         Validate phone number against the country's max length.
@@ -224,14 +212,6 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
             max_len = clinic_profile.country.max_phone_number
             if len(value) > max_len:
                 raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {clinic_profile.country.name}.")
-        return value
-
-    def validate_national_id(self, value):
-        clinic_profile = self.context.get('clinic_owner_profile')
-        if clinic_profile and value:
-            max_len = clinic_profile.country.max_id_number
-            if len(value) > max_len:
-                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {clinic_profile.country.name}.")
         return value
 
 
@@ -251,14 +231,6 @@ class ReceptionProfileSerializer(serializers.ModelSerializer):
             max_len = clinic_profile.country.max_phone_number
             if len(value) > max_len:
                 raise serializers.ValidationError(f"Phone number cannot exceed {max_len} digits for {clinic_profile.country.name}.")
-        return value
-
-    def validate_national_id(self, value):
-        clinic_profile = self.context.get('clinic_owner_profile')
-        if clinic_profile and value:
-            max_len = clinic_profile.country.max_id_number
-            if len(value) > max_len:
-                raise serializers.ValidationError(f"National ID cannot exceed {max_len} characters for {clinic_profile.country.name}.")
         return value
 
 

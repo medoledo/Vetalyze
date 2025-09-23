@@ -1,4 +1,5 @@
 from rest_framework.permissions import BasePermission
+from .models import User
 
 
 class IsSiteOwner(BasePermission):
@@ -7,7 +8,7 @@ class IsSiteOwner(BasePermission):
     """
 
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == 'SITE_OWNER')
+        return bool(request.user and request.user.is_authenticated and request.user.role == User.Role.SITE_OWNER)
 
 
 class IsClinicOwner(BasePermission):
@@ -16,7 +17,7 @@ class IsClinicOwner(BasePermission):
     """
 
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == 'CLINIC_OWNER')
+        return bool(request.user and request.user.is_authenticated and request.user.role == User.Role.CLINIC_OWNER)
 
 
 class IsDoctor(BasePermission):
@@ -25,7 +26,7 @@ class IsDoctor(BasePermission):
     """
 
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == 'DOCTOR')
+        return bool(request.user and request.user.is_authenticated and request.user.role == User.Role.DOCTOR)
 
 
 class IsReception(BasePermission):
@@ -34,4 +35,4 @@ class IsReception(BasePermission):
     """
 
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.role == 'RECEPTION')
+        return bool(request.user and request.user.is_authenticated and request.user.role == User.Role.RECEPTION)
