@@ -5,8 +5,8 @@ from rest_framework import generics, views, status
 from rest_framework.response import Response
 from django.conf import settings
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, ClinicSubscriptionSerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer
-from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
+from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, CreateSubscriptionHistorySerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer, SubscriptionHistorySerializer
+from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 from .permissions import IsSiteOwner , IsClinicOwner, IsDoctor, IsReception
 
 
@@ -32,6 +32,15 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsSiteOwner]
     queryset = ClinicOwnerProfile.objects.all()
     serializer_class = ClinicOwnerProfileSerializer
+
+    def get_serializer_context(self):
+        """Ensure the view is passed to the serializer context."""
+        context = super().get_serializer_context()
+        context['view'] = self
+        return context
+
+    def perform_create(self, serializer):
+        serializer.save(added_by=self.request.user)
 
 
 class ClinicOwnerProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -95,20 +104,31 @@ class ChangePasswordView(views.APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class ActivateSubscriptionView(views.APIView):
+class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
     """
-    Activates a clinic's subscription. Sets the plan, payment, and makes the clinic active.
+    - Site Owners can list subscription history for a clinic.
+    - Site Owners can create a new subscription, which also activates the clinic.
     """
     permission_classes = [IsSiteOwner]
+    
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return CreateSubscriptionHistorySerializer
+        return SubscriptionHistorySerializer
 
-    def post(self, request, *args, **kwargs):
-        profile = ClinicOwnerProfile.objects.get(pk=self.kwargs['pk'])
-        serializer = ClinicSubscriptionSerializer(instance=profile, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            full_profile_serializer = ClinicOwnerProfileSerializer(profile)
-            return Response(full_profile_serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def get_queryset(self):
+        clinic_pk = self.kwargs['clinic_pk']
+        return SubscriptionHistory.objects.filter(clinic_id=clinic_pk)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['clinic_profile'] = ClinicOwnerProfile.objects.get(pk=self.kwargs['clinic_pk'])
+        return context
+
+    def perform_create(self, serializer):
+        # The serializer's `create` method now handles all the logic,
+        # including setting the clinic status and deactivating old subscriptions.
+        serializer.save()
 
 
 class DoctorProfileListCreateView(generics.ListCreateAPIView):

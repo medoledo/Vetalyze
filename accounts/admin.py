@@ -1,6 +1,17 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
+from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
+
+
+class SubscriptionHistoryInline(admin.TabularInline):
+    """
+    Allows viewing subscription history directly within the ClinicOwnerProfile admin page.
+    """
+    model = SubscriptionHistory
+    extra = 0  # Don't show extra blank forms
+    readonly_fields = ('days_left', 'end_date')
+    fields = ('subscription_type', 'payment_method', 'amount_paid', 'start_date', 'end_date', 'status', 'days_left', 'activated_by')
+
 
 class ClinicOwnerProfileInline(admin.StackedInline):
     """
@@ -8,7 +19,6 @@ class ClinicOwnerProfileInline(admin.StackedInline):
     """
     model = ClinicOwnerProfile
     can_delete = False
-    fields = ('clinic_owner_name', 'clinic_name', 'country', 'is_active', 'owner_phone_number', 'clinic_phone_number', 'location', 'email', 'subscription_type', 'amount_paid', 'payment_method', 'subscription_start_date', 'subscription_end_date')
 
 
 class DoctorProfileInline(admin.StackedInline):
@@ -62,13 +72,28 @@ class CustomUserAdmin(UserAdmin):
         return []
 
 
+@admin.register(ClinicOwnerProfile)
+class ClinicOwnerProfileAdmin(admin.ModelAdmin):
+    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan')
+    list_filter = ('status', 'country')
+    search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
+    inlines = [SubscriptionHistoryInline]
+    readonly_fields = ('user', 'joined_date', 'added_by', 'active_subscription', 'current_plan')
+
+
 admin.site.register(User, CustomUserAdmin)
-admin.site.register(ClinicOwnerProfile)
 admin.site.register(DoctorProfile)
 admin.site.register(ReceptionProfile)
+
+@admin.register(SubscriptionHistory)
+class SubscriptionHistoryAdmin(admin.ModelAdmin):
+    list_display = ('clinic', 'subscription_type', 'start_date', 'end_date', 'status')
+    list_filter = ('status', 'subscription_type')
+    readonly_fields = ('end_date', 'days_left')
+    search_fields = ('clinic__clinic_name', 'ref_number')
+
 admin.site.register(SubscriptionType)
 admin.site.register(Country)
-
 
 @admin.register(PaymentMethod)
 class PaymentMethodAdmin(admin.ModelAdmin):

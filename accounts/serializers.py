@@ -1,8 +1,7 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
-from datetime import date
-from django.contrib.auth import authenticate
-from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod
+from datetime import date, timedelta
+from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -25,17 +24,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             raise serializers.ValidationError("User account is inactive.", code='authorization')
 
         # Check the clinic's active status for all clinic-related roles
-        clinic_is_active = True
-        if user.role == User.Role.CLINIC_OWNER:
-            if hasattr(user, 'clinic_owner_profile'):
-                clinic_is_active = user.clinic_owner_profile.is_active
-        elif user.role == User.Role.DOCTOR:
-            if hasattr(user, 'doctor_profile'):
-                clinic_is_active = user.doctor_profile.clinic_owner_profile.is_active
-        elif user.role == User.Role.RECEPTION:
-            if hasattr(user, 'reception_profile'):
-                clinic_is_active = user.reception_profile.clinic_owner_profile.is_active
+        clinic_profile = None
+        if hasattr(user, 'clinic_owner_profile'):
+            clinic_profile = user.clinic_owner_profile
+        elif hasattr(user, 'doctor_profile') or hasattr(user, 'reception_profile'):
+            clinic_profile = user.profile.clinic_owner_profile
 
+        clinic_is_active = clinic_profile.is_active if clinic_profile else True
         if not clinic_is_active:
             raise serializers.ValidationError(
                 "The clinic this account is associated with is inactive. Please contact support.", code='authorization'
@@ -44,16 +39,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data['role'] = user.role
 
         # Add clinic_name to the response data
-        clinic_name = "Vetalyze" # Default for Admin/Site Owner
-        if user.role == User.Role.CLINIC_OWNER:
-            if hasattr(user, 'clinic_owner_profile'):
-                clinic_name = user.clinic_owner_profile.clinic_name
-        elif user.role == User.Role.DOCTOR:
-            if hasattr(user, 'doctor_profile'):
-                clinic_name = user.doctor_profile.clinic_owner_profile.clinic_name
-        elif user.role == User.Role.RECEPTION:
-            if hasattr(user, 'reception_profile'):
-                clinic_name = user.reception_profile.clinic_owner_profile.clinic_name
+        clinic_name = "Vetalyze"  # Default for Admin/Site Owner
+        if clinic_profile:
+            clinic_name = clinic_profile.clinic_name
         
         data['clinic_name'] = clinic_name
         return data
@@ -92,50 +80,58 @@ class SubscriptionTypeSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class SubscriptionHistorySerializer(serializers.ModelSerializer):
+    subscription_type = SubscriptionTypeSerializer(read_only=True)
+    payment_method = PaymentMethodSerializer(read_only=True)
+    activated_by = UserSerializer(read_only=True)
+    days_left = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = SubscriptionHistory
+        fields = '__all__'
+
+
 class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer()
     country = CountrySerializer(read_only=True)
-    subscription_type = SubscriptionTypeSerializer(read_only=True)
-    payment_method = PaymentMethodSerializer(read_only=True)
-    
-    # These fields are used for writing data (create/update) but won't be shown in the response.
+    current_plan = SubscriptionTypeSerializer(read_only=True)
+    added_by = serializers.StringRelatedField(read_only=True)
+    subscription_history = SubscriptionHistorySerializer(many=True, read_only=True)
+
     country_id = serializers.PrimaryKeyRelatedField(
         queryset=Country.objects.all(), source='country', write_only=True
-    )
-    subscription_type_id = serializers.PrimaryKeyRelatedField(
-        queryset=SubscriptionType.objects.all(), source='subscription_type', write_only=True, allow_null=True, required=False
-    )
-    payment_method_id = serializers.PrimaryKeyRelatedField(
-        queryset=PaymentMethod.objects.all(), source='payment_method', write_only=True, allow_null=True
     )
 
     class Meta:
         model = ClinicOwnerProfile
         fields = [
             'user', 'country', 'country_id', 'clinic_owner_name',
-            'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location', 'email', 
-            'is_active', 'subscription_type', 'amount_paid', 'payment_method', 
-            'subscription_start_date', 'subscription_end_date', 'joined_date'
+            'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location',
+            'facebook', 'website', 'instagram', 'tiktok', 'gmail',
+            'added_by', 'joined_date', 'status', 'current_plan', 'subscription_history'
         ]
-        read_only_fields = [
-            'is_active', 'subscription_type', 'amount_paid', 'payment_method', 
-            'subscription_start_date', 'subscription_end_date', 'joined_date'
-        ]
+        read_only_fields = ['joined_date', 'added_by', 'current_plan', 'subscription_history']
+
+    def to_representation(self, instance):
+        """
+        Exclude `subscription_history` for list views to keep the payload light.
+        """
+        ret = super().to_representation(instance)
+        view = self.context.get('view')
+        if view and view.action == 'list':
+            ret.pop('subscription_history', None)
+        return ret
 
     def create(self, validated_data):
         user_data = validated_data.pop('user')
-        # Ensure the user being created has the correct role
         user_data['role'] = User.Role.CLINIC_OWNER
         user = UserSerializer().create(validated_data=user_data)
         
-        # Create the profile linked to the new user
+        # The 'added_by' field is expected to be passed in from the view.
         profile = ClinicOwnerProfile.objects.create(user=user, **validated_data)
         return profile
 
     def update(self, instance, validated_data):
-        # This update method is only for Site Owners to update profile details.
-        # Password changes are handled by a separate endpoint.
-        # Prevent changing the user or password via this method.
         validated_data.pop('user', None)
 
         # Update fields
@@ -168,32 +164,61 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         return data
 
 
-class ClinicSubscriptionSerializer(serializers.Serializer):
-    """
-    Serializer for activating a clinic's subscription.
-    """
+class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
+    """Serializer for creating a new subscription history record."""
     subscription_type_id = serializers.PrimaryKeyRelatedField(
-        queryset=SubscriptionType.objects.all(), source='subscription_type', write_only=True
+        queryset=SubscriptionType.objects.all(), source='subscription_type'
     )
     payment_method_id = serializers.PrimaryKeyRelatedField(
-        queryset=PaymentMethod.objects.all(), source='payment_method', write_only=True
+        queryset=PaymentMethod.objects.all(), source='payment_method'
     )
-    amount_paid = serializers.DecimalField(max_digits=8, decimal_places=2)
 
-    def update(self, instance, validated_data):
+    class Meta:
+        model = SubscriptionHistory
+        fields = [
+            'subscription_type_id', 'payment_method_id', 'amount_paid', 'start_date',
+            'ref_number', 'comments', 'extra_accounts_number'
+        ]
+        read_only_fields = ['end_date']
+
+    def validate(self, data):
         """
-        Activates the clinic by setting subscription details.
+        Check for overlapping subscriptions.
         """
-        instance.subscription_type = validated_data.get('subscription_type')
-        instance.payment_method = validated_data.get('payment_method')
-        instance.amount_paid = validated_data.get('amount_paid')
+        clinic_profile = self.context['clinic_profile']
+        start_date = data['start_date']
+        subscription_type = data['subscription_type']
+        end_date = start_date + timedelta(days=subscription_type.duration_days)
+
+        # Check for any subscriptions that are not 'ENDED' or 'SUSPENDED' and overlap with the new one.
+        overlapping_subscriptions = SubscriptionHistory.objects.filter(
+            clinic=clinic_profile,
+            end_date__gte=start_date,
+            start_date__lte=end_date
+        ).exclude(status__in=[SubscriptionHistory.Status.ENDED, SubscriptionHistory.Status.SUSPENDED])
+
+        if overlapping_subscriptions.exists():
+            raise serializers.ValidationError("An active or upcoming subscription already exists in this date range.")
+
+        return data
+
+    def create(self, validated_data):
+        # clinic and activated_by are set in the view
+        clinic_profile = self.context['clinic_profile']
+        activated_by_user = self.context['request'].user
+
+        # Deactivate any other active subscriptions for this clinic
+        SubscriptionHistory.objects.filter(clinic=clinic_profile, status=SubscriptionHistory.Status.ACTIVE).update(status=SubscriptionHistory.Status.ENDED)
+
+        # Create the new subscription history
+        subscription = SubscriptionHistory.objects.create(clinic=clinic_profile, activated_by=activated_by_user, **validated_data)
+
+        # Update the clinic's status to ACTIVE if the new subscription is active now
+        if subscription.status == SubscriptionHistory.Status.ACTIVE:
+            clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
+            clinic_profile.save()
         
-        # Set automatic fields
-        instance.subscription_start_date = date.today()
-        instance.is_active = True
-        
-        instance.save() # The model's save() method will calculate the end_date
-        return instance
+        return subscription
 
 
 class DoctorProfileSerializer(serializers.ModelSerializer):

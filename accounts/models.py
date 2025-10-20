@@ -1,8 +1,9 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
-from datetime import timedelta
+from datetime import date, timedelta
 from django.core.validators import MinValueValidator
 from django.conf import settings
+from django.utils.translation import gettext_lazy as _
 
 
 class User(AbstractUser):
@@ -34,46 +35,74 @@ class Country(models.Model):
 
     def __str__(self):
         return self.name
+    
+    class Meta:
+        verbose_name = _("Country")
+        verbose_name_plural = _("Countries")
 
 
 class ClinicOwnerProfile(models.Model):
     """
     Profile for users with the CLINIC_OWNER role.
     """
+    class Status(models.TextChoices):
+        ACTIVE = "ACTIVE", _("Active")
+        ENDED = "ENDED", _("Ended")
+        SUSPENDED = "SUSPENDED", _("Suspended")
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         primary_key=True,
         related_name='clinic_owner_profile',
-        limit_choices_to={'role': User.Role.CLINIC_OWNER}
+        limit_choices_to={'role': 'CLINIC_OWNER'}
     )
     country = models.ForeignKey(Country, on_delete=models.PROTECT, related_name='clinics')
     clinic_owner_name = models.CharField(max_length=255)
     clinic_name = models.CharField(max_length=255)
-    owner_phone_number = models.CharField(max_length=20, blank=True) 
-    clinic_phone_number = models.CharField(max_length=20, blank=True)
+    owner_phone_number = models.CharField(max_length=20)
+    clinic_phone_number = models.CharField(max_length=20)
     location = models.CharField(max_length=255, blank=True)
-    email = models.EmailField(unique=True)
-    # Subscription details
-    subscription_type = models.ForeignKey('SubscriptionType', on_delete=models.SET_NULL, null=True, blank=True)
-    amount_paid = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
-    payment_method = models.ForeignKey('PaymentMethod', on_delete=models.SET_NULL, null=True, blank=True)
-    subscription_start_date = models.DateField(null=True, blank=True)
-    subscription_end_date = models.DateField(null=True, blank=True)
-    # Other details
-    joined_date = models.DateField(auto_now_add=True)
-    is_active = models.BooleanField(default=False)
+    
+    # Social and Contact Links
+    facebook = models.URLField(max_length=200, blank=True, null=True)
+    website = models.URLField(max_length=200, blank=True, null=True)
+    instagram = models.URLField(max_length=200, blank=True, null=True)
+    tiktok = models.URLField(max_length=200, blank=True, null=True)
+    gmail = models.EmailField(blank=True, null=True)
 
-    def save(self, *args, **kwargs):
-        """
-        Automatically calculate the subscription end date upon saving.
-        """
-        if self.subscription_type and self.subscription_start_date:
-            self.subscription_end_date = self.subscription_start_date + timedelta(
-                days=self.subscription_type.duration_days
-            )
-        
-        super().save(*args, **kwargs)
+    # Management and Status
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_clinics',
+        limit_choices_to={'role': 'SITE_OWNER'}
+    )
+    joined_date = models.DateField(auto_now_add=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.SUSPENDED
+    )
+
+    @property
+    def active_subscription(self):
+        """Returns the currently active subscription history record, or None."""
+        return self.subscription_history.filter(status=SubscriptionHistory.Status.ACTIVE).first()
+
+    @property
+    def current_plan(self):
+        """Returns the SubscriptionType of the active subscription, or None."""
+        active_sub = self.active_subscription
+        if active_sub:
+            return active_sub.subscription_type
+        return None
+    
+    @property
+    def is_active(self):
+        """Property to check if the clinic's status is Active."""
+        return self.status == self.Status.ACTIVE
 
     def __str__(self):
         return f"{self.clinic_owner_name} - {self.clinic_name}"
@@ -88,7 +117,7 @@ class DoctorProfile(models.Model):
         on_delete=models.CASCADE,
         primary_key=True,
         related_name='doctor_profile',
-        limit_choices_to={'role': User.Role.DOCTOR}
+        limit_choices_to={'role': 'DOCTOR'}
     )
     clinic_owner_profile = models.ForeignKey(
         ClinicOwnerProfile,
@@ -113,7 +142,7 @@ class ReceptionProfile(models.Model):
         on_delete=models.CASCADE,
         primary_key=True,
         related_name='reception_profile',
-        limit_choices_to={'role': User.Role.RECEPTION}
+        limit_choices_to={'role': 'RECEPTION'}
     )
     clinic_owner_profile = models.ForeignKey(
         ClinicOwnerProfile,
@@ -127,6 +156,70 @@ class ReceptionProfile(models.Model):
 
     def __str__(self):
         return self.full_name
+
+
+class SubscriptionHistory(models.Model):
+    """
+    Stores the subscription history for each clinic.
+    """
+    class Status(models.TextChoices):
+        UPCOMING = "UPCOMING", _("Upcoming")
+        ACTIVE = "ACTIVE", _("Active")
+        ENDED = "ENDED", _("Ended")
+        SUSPENDED = "SUSPENDED", _("Suspended")
+
+    clinic = models.ForeignKey(
+        ClinicOwnerProfile,
+        on_delete=models.CASCADE,
+        related_name='subscription_history'
+    )
+    subscription_type = models.ForeignKey('SubscriptionType', on_delete=models.PROTECT)
+    extra_accounts_number = models.PositiveIntegerField(default=0)
+    payment_method = models.ForeignKey('PaymentMethod', on_delete=models.PROTECT)
+    ref_number = models.CharField(max_length=100, blank=True)
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
+    activated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='activated_subscriptions',
+        limit_choices_to={'role': 'SITE_OWNER'}
+    )
+    comments = models.TextField(blank=True)
+    start_date = models.DateField()
+    end_date = models.DateField(blank=True) # Will be auto-populated
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
+
+    @property
+    def days_left(self):
+        """Calculates the number of days remaining for the subscription."""
+        if self.end_date and self.status == self.Status.ACTIVE:
+            today = date.today()
+            delta = self.end_date - today
+            return max(0, delta.days)
+        return 0
+
+    def save(self, *args, **kwargs):
+        """
+        - Automatically calculate the end_date based on subscription duration.
+        - Automatically set the status based on the start_date.
+        """
+        # Calculate end_date if it's not set
+        if not self.end_date and self.subscription_type:
+            self.end_date = self.start_date + timedelta(days=self.subscription_type.duration_days)
+
+        # Set status based on dates, but only if the status is not being manually set to something else
+        # like SUSPENDED or ENDED.
+        if self.status in [self.Status.UPCOMING, self.Status.ACTIVE]:
+            today = date.today()
+            if self.start_date > today:
+                self.status = self.Status.UPCOMING
+            else:
+                self.status = self.Status.ACTIVE
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.clinic.clinic_name} - {self.subscription_type.name} ({self.status})"
 
 
 class SubscriptionType(models.Model):
