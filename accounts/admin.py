@@ -1,3 +1,5 @@
+#accounts/admin.py
+
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.db.models import Prefetch
@@ -10,8 +12,8 @@ class SubscriptionHistoryInline(admin.TabularInline):
     """
     model = SubscriptionHistory
     extra = 0  # Don't show extra blank forms
-    readonly_fields = ('days_left', 'end_date', 'activation_date')
-    fields = ('subscription_type', 'payment_method', 'amount_paid', 'start_date', 'end_date', 'status', 'days_left', 'activated_by')
+    readonly_fields = ('days_left', 'end_date', 'activation_date', 'comments')
+    fields = ('subscription_type', 'payment_method', 'amount_paid', 'start_date', 'end_date', 'status', 'days_left', 'activated_by', 'comments')
 
 
 class ClinicOwnerProfileInline(admin.StackedInline):
@@ -77,6 +79,29 @@ class CustomUserAdmin(UserAdmin):
 def make_ended(modeladmin, request, queryset):
     queryset.update(status=ClinicOwnerProfile.Status.ENDED)
 
+@admin.action(description='Suspend selected ACTIVE clinics')
+def suspend_clinics(modeladmin, request, queryset):
+    for profile in queryset.filter(status=ClinicOwnerProfile.Status.ACTIVE):
+        active_sub = profile.active_subscription
+        if active_sub:
+            profile.status = ClinicOwnerProfile.Status.SUSPENDED
+            active_sub.status = SubscriptionHistory.Status.SUSPENDED
+            active_sub.comments = f"Suspended via admin action by {request.user.username}."
+            profile.save()
+            active_sub.save()
+
+@admin.action(description='Reactivate selected SUSPENDED clinics')
+def reactivate_clinics(modeladmin, request, queryset):
+    for profile in queryset.filter(status=ClinicOwnerProfile.Status.SUSPENDED):
+        suspended_sub = profile.subscription_history.filter(status=SubscriptionHistory.Status.SUSPENDED).first()
+        if suspended_sub:
+            # The model's save() method will handle changing the status back to ACTIVE
+            suspended_sub.comments = f"Reactivated via admin action by {request.user.username}."
+            suspended_sub.save()
+
+        profile.status = ClinicOwnerProfile.Status.ACTIVE
+        profile.save()
+
 
 @admin.register(ClinicOwnerProfile)
 class ClinicOwnerProfileAdmin(admin.ModelAdmin):
@@ -85,7 +110,7 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
     readonly_fields = ('user', 'joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left')
-    actions = [make_ended]
+    actions = [make_ended, suspend_clinics, reactivate_clinics]
 
     def get_queryset(self, request):
         """Optimize the queryset to prevent N+1 queries."""
@@ -112,7 +137,7 @@ admin.site.register(ReceptionProfile)
 class SubscriptionHistoryAdmin(admin.ModelAdmin):
     list_display = ('clinic', 'subscription_type', 'start_date', 'end_date', 'status')
     list_filter = ('status', 'subscription_type')
-    readonly_fields = ('end_date', 'days_left', 'activation_date')
+    readonly_fields = ('end_date', 'days_left', 'activation_date', 'comments')
     search_fields = ('clinic__clinic_name', 'ref_number')
 
 admin.site.register(SubscriptionType)
