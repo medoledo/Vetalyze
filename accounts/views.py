@@ -1,10 +1,12 @@
 from django.shortcuts import render
 from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework import generics, views, status
 from rest_framework.response import Response
 from django.conf import settings
 from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.shortcuts import get_object_or_404
 from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, CreateSubscriptionHistorySerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer, SubscriptionHistorySerializer
 from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 from .permissions import IsSiteOwner , IsClinicOwner, IsDoctor, IsReception
@@ -24,13 +26,36 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
 
+class LogoutView(views.APIView):
+    """
+    An endpoint to blacklist a refresh token.
+    On the client-side, the access and refresh tokens should be deleted upon a successful request.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            refresh_token = request.data["refresh"]
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            return Response(status=status.HTTP_205_RESET_CONTENT)
+        except Exception as e:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+
+
 class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
     """
     - Site Owners can list all clinic profiles.
     - Site Owners can create a new clinic profile.
     """
     permission_classes = [IsSiteOwner]
-    queryset = ClinicOwnerProfile.objects.all()
+    queryset = ClinicOwnerProfile.objects.select_related(
+        'user', 'country'
+    ).prefetch_related(
+        'subscription_history__subscription_type',
+        'subscription_history__payment_method'
+    )
     serializer_class = ClinicOwnerProfileSerializer
 
     def get_serializer_context(self):
@@ -43,13 +68,18 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
         serializer.save(added_by=self.request.user)
 
 
-class ClinicOwnerProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
+class ClinicOwnerProfileDetailView(generics.RetrieveUpdateAPIView):
     """
-    - Site Owners can retrieve, update, or delete any clinic profile.
+    - Site Owners can retrieve and update any clinic profile.
     - Clinic Owners can retrieve their own profile.
     """
     permission_classes = [IsSiteOwner | IsClinicOwner]
-    queryset = ClinicOwnerProfile.objects.all()
+    queryset = ClinicOwnerProfile.objects.select_related(
+        'user', 'country'
+    ).prefetch_related(
+        'subscription_history__subscription_type',
+        'subscription_history__payment_method'
+    )
     serializer_class = ClinicOwnerProfileSerializer
 
     def get_object(self):
@@ -63,12 +93,6 @@ class ClinicOwnerProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.user.role != User.Role.SITE_OWNER:
             self.permission_denied(self.request, message='You do not have permission to edit this profile.')
         serializer.save()
-
-    def perform_destroy(self, instance):
-        if self.request.user.role != User.Role.SITE_OWNER:
-            self.permission_denied(self.request, message='You do not have permission to delete this profile.')
-        # The user is deleted via the on_delete=CASCADE on the profile's user field
-        instance.delete()
 
 
 class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
@@ -89,7 +113,7 @@ class ChangePasswordView(views.APIView):
     permission_classes = [IsSiteOwner | IsClinicOwner]
 
     def post(self, request, *args, **kwargs):
-        profile = ClinicOwnerProfile.objects.get(pk=self.kwargs['pk'])
+        profile = get_object_or_404(ClinicOwnerProfile, pk=self.kwargs['pk'])
         user_to_update = profile.user
 
         # Security check
@@ -118,11 +142,14 @@ class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         clinic_pk = self.kwargs['clinic_pk']
-        return SubscriptionHistory.objects.filter(clinic_id=clinic_pk)
+        return SubscriptionHistory.objects.filter(clinic_id=clinic_pk).select_related(
+            'subscription_type', 'payment_method', 'activated_by'
+        )
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        context['clinic_profile'] = ClinicOwnerProfile.objects.get(pk=self.kwargs['clinic_pk'])
+        clinic_profile = get_object_or_404(ClinicOwnerProfile, pk=self.kwargs['clinic_pk'])
+        context['clinic_profile'] = clinic_profile
         return context
 
     def perform_create(self, serializer):
@@ -141,7 +168,9 @@ class DoctorProfileListCreateView(generics.ListCreateAPIView):
         return context
 
     def get_queryset(self):
-        return DoctorProfile.objects.filter(clinic_owner_profile=self.request.user.clinic_owner_profile)
+        return DoctorProfile.objects.filter(
+            clinic_owner_profile=self.request.user.clinic_owner_profile
+        ).select_related('user')
 
 
 class DoctorProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -151,9 +180,9 @@ class DoctorProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         user = self.request.user
         if user.role == User.Role.CLINIC_OWNER:
-            return DoctorProfile.objects.filter(clinic_owner_profile=user.clinic_owner_profile)
+            return DoctorProfile.objects.filter(clinic_owner_profile=user.clinic_owner_profile).select_related('user')
         elif user.role == User.Role.DOCTOR:
-            return DoctorProfile.objects.filter(user=user)
+            return DoctorProfile.objects.filter(user=user).select_related('user')
         return DoctorProfile.objects.none()
 
 
@@ -167,7 +196,9 @@ class ReceptionProfileListCreateView(generics.ListCreateAPIView):
         return context
 
     def get_queryset(self):
-        return ReceptionProfile.objects.filter(clinic_owner_profile=self.request.user.clinic_owner_profile)
+        return ReceptionProfile.objects.filter(
+            clinic_owner_profile=self.request.user.clinic_owner_profile
+        ).select_related('user')
 
 
 class ReceptionProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -177,9 +208,9 @@ class ReceptionProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         user = self.request.user
         if user.role == User.Role.CLINIC_OWNER:
-            return ReceptionProfile.objects.filter(clinic_owner_profile=user.clinic_owner_profile)
+            return ReceptionProfile.objects.filter(clinic_owner_profile=user.clinic_owner_profile).select_related('user')
         elif user.role == User.Role.RECEPTION:
-            return ReceptionProfile.objects.filter(user=user)
+            return ReceptionProfile.objects.filter(user=user).select_related('user')
         return ReceptionProfile.objects.none()
 
 

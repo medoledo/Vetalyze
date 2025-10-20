@@ -21,7 +21,7 @@ class User(AbstractUser):
         RECEPTION = "RECEPTION", "Reception"
 
     role = models.CharField(
-        max_length=50, choices=Role.choices, default=Role.RECEPTION
+        max_length=50, choices=Role.choices, default=Role.RECEPTION, db_index=True
     )
 
 
@@ -83,7 +83,8 @@ class ClinicOwnerProfile(models.Model):
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
-        default=Status.SUSPENDED
+        default=Status.SUSPENDED,
+        db_index=True
     )
 
     @property
@@ -187,8 +188,8 @@ class SubscriptionHistory(models.Model):
     )
     comments = models.TextField(blank=True)
     start_date = models.DateField()
-    end_date = models.DateField(blank=True) # Will be auto-populated
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
+    end_date = models.DateField(blank=True, db_index=True) # Will be auto-populated
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING, db_index=True)
 
     @property
     def days_left(self):
