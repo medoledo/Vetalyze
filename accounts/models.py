@@ -46,6 +46,7 @@ class ClinicOwnerProfile(models.Model):
     Profile for users with the CLINIC_OWNER role.
     """
     class Status(models.TextChoices):
+        INACTIVE = "INACTIVE", _("Inactive") # No subscriptions yet
         ACTIVE = "ACTIVE", _("Active")
         ENDED = "ENDED", _("Ended")
         SUSPENDED = "SUSPENDED", _("Suspended")
@@ -83,7 +84,7 @@ class ClinicOwnerProfile(models.Model):
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
-        default=Status.SUSPENDED,
+        default=Status.INACTIVE,
         db_index=True
     )
 
@@ -187,6 +188,7 @@ class SubscriptionHistory(models.Model):
         limit_choices_to={'role': 'SITE_OWNER'}
     )
     comments = models.TextField(blank=True)
+    activation_date = models.DateField(auto_now_add=True)
     start_date = models.DateField()
     end_date = models.DateField(blank=True, db_index=True) # Will be auto-populated
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING, db_index=True)

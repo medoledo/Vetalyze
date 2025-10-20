@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+from django.db.models import Prefetch
 from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 
 
@@ -9,7 +10,7 @@ class SubscriptionHistoryInline(admin.TabularInline):
     """
     model = SubscriptionHistory
     extra = 0  # Don't show extra blank forms
-    readonly_fields = ('days_left', 'end_date')
+    readonly_fields = ('days_left', 'end_date', 'activation_date')
     fields = ('subscription_type', 'payment_method', 'amount_paid', 'start_date', 'end_date', 'status', 'days_left', 'activated_by')
 
 
@@ -72,13 +73,35 @@ class CustomUserAdmin(UserAdmin):
         return []
 
 
+@admin.action(description='Mark selected clinics as Ended')
+def make_ended(modeladmin, request, queryset):
+    queryset.update(status=ClinicOwnerProfile.Status.ENDED)
+
+
 @admin.register(ClinicOwnerProfile)
 class ClinicOwnerProfileAdmin(admin.ModelAdmin):
-    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan')
+    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan', 'days_left')
     list_filter = ('status', 'country')
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
-    readonly_fields = ('user', 'joined_date', 'added_by', 'active_subscription', 'current_plan')
+    readonly_fields = ('user', 'joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left')
+    actions = [make_ended]
+
+    def get_queryset(self, request):
+        """Optimize the queryset to prevent N+1 queries."""
+        qs = super().get_queryset(request)
+        return qs.select_related('user', 'country').prefetch_related(
+            Prefetch(
+                'subscription_history',
+                queryset=SubscriptionHistory.objects.filter(status=SubscriptionHistory.Status.ACTIVE).select_related('subscription_type'),
+                to_attr='_active_subscription_cached'
+            )
+        )
+
+    def days_left(self, obj):
+        """Display days left from the prefetched active subscription."""
+        return obj.active_subscription.days_left if obj.active_subscription else None
+    days_left.short_description = 'Days Left'
 
 
 admin.site.register(User, CustomUserAdmin)
@@ -89,7 +112,7 @@ admin.site.register(ReceptionProfile)
 class SubscriptionHistoryAdmin(admin.ModelAdmin):
     list_display = ('clinic', 'subscription_type', 'start_date', 'end_date', 'status')
     list_filter = ('status', 'subscription_type')
-    readonly_fields = ('end_date', 'days_left')
+    readonly_fields = ('end_date', 'days_left', 'activation_date')
     search_fields = ('clinic__clinic_name', 'ref_number')
 
 admin.site.register(SubscriptionType)

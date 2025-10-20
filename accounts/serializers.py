@@ -3,6 +3,7 @@ from rest_framework import serializers
 from datetime import date, timedelta
 from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 
+from django.db.models import Q
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
@@ -16,6 +17,40 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
+        # Run a subscription status check for all clinics on every login.
+        # This is an alternative to a cron job running a management command.
+        today = date.today()
+
+        # 1. Handle newly active subscriptions
+        upcoming_to_activate = SubscriptionHistory.objects.filter(
+            status=SubscriptionHistory.Status.UPCOMING,
+            start_date__lte=today
+        )
+        for sub in upcoming_to_activate:
+            # Deactivate any other currently active subscription for the same clinic
+            SubscriptionHistory.objects.filter(
+                clinic=sub.clinic, status=SubscriptionHistory.Status.ACTIVE
+            ).update(status=SubscriptionHistory.Status.ENDED)
+
+            # Activate the new subscription and the clinic
+            sub.status = SubscriptionHistory.Status.ACTIVE
+            sub.save()
+            sub.clinic.status = ClinicOwnerProfile.Status.ACTIVE
+            sub.clinic.save()
+
+        # 2. Handle expired subscriptions
+        expired_subscriptions = SubscriptionHistory.objects.filter(
+            status=SubscriptionHistory.Status.ACTIVE,
+            end_date__lt=today
+        )
+        for sub in expired_subscriptions:
+            sub.status = SubscriptionHistory.Status.ENDED
+            sub.save()
+            # If the clinic has no other active or upcoming subscriptions, set its status to ENDED
+            if not sub.clinic.subscription_history.filter(Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.UPCOMING)).exists():
+                sub.clinic.status = ClinicOwnerProfile.Status.ENDED
+                sub.clinic.save()
+
         data = super().validate(attrs)
         user = self.user
 
@@ -88,7 +123,7 @@ class SubscriptionHistorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SubscriptionHistory
-        fields = '__all__'
+        fields = ['id', 'subscription_type', 'payment_method', 'activated_by', 'days_left', 'extra_accounts_number', 'ref_number', 'amount_paid', 'comments', 'activation_date', 'start_date', 'end_date', 'status', 'clinic']
 
 
 class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
@@ -194,6 +229,10 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
         Check for overlapping subscriptions.
         """
         clinic_profile = self.context['clinic_profile']
+
+        if clinic_profile.status == ClinicOwnerProfile.Status.SUSPENDED:
+            raise serializers.ValidationError("Cannot create a new subscription for a suspended clinic. Please reactivate it first.")
+
         start_date = data['start_date']
         subscription_type = data['subscription_type']
         end_date = start_date + timedelta(days=subscription_type.duration_days)

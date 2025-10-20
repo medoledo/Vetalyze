@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from django.conf import settings
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, Http404
 from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, CreateSubscriptionHistorySerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer, SubscriptionHistorySerializer
 from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 from .permissions import IsSiteOwner , IsClinicOwner, IsDoctor, IsReception
@@ -126,6 +126,62 @@ class ChangePasswordView(views.APIView):
             user_to_update.save()
             return Response({'status': 'password set'}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SuspendClinicView(views.APIView):
+    """
+    An endpoint for Site Owners to suspend or reactivate a clinic.
+    - POST with {"action": "suspend", "comment": "Reason for suspension."} to suspend.
+    - POST with {"action": "reactivate", "comment": "Reason for reactivating."} to reactivate.
+    """
+    permission_classes = [IsSiteOwner]
+
+    def post(self, request, *args, **kwargs):
+        clinic_profile = get_object_or_404(ClinicOwnerProfile, pk=self.kwargs['pk'])
+        action = request.data.get('action')
+
+        if action == 'suspend':
+            comment = request.data.get('comment')
+            if not comment or not comment.strip():
+                return Response({'error': 'A comment is required to suspend a clinic.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if clinic_profile.status != ClinicOwnerProfile.Status.ACTIVE:
+                return Response({'error': 'Only active clinics can be suspended.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            active_sub = clinic_profile.active_subscription
+            if not active_sub:
+                # This case should ideally not happen if status is ACTIVE
+                return Response({'error': 'No active subscription found to suspend.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Update statuses
+            clinic_profile.status = ClinicOwnerProfile.Status.SUSPENDED
+            active_sub.status = SubscriptionHistory.Status.SUSPENDED
+            active_sub.comments = f"Suspended: {comment}"
+            
+            clinic_profile.save()
+            active_sub.save()
+            
+            return Response({'status': 'Clinic and subscription suspended.'}, status=status.HTTP_200_OK)
+
+        elif action == 'reactivate':
+            comment = request.data.get('comment')
+            if not comment or not comment.strip():
+                return Response({'error': 'A comment is required to reactivate a clinic.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if clinic_profile.status != ClinicOwnerProfile.Status.SUSPENDED:
+                return Response({'error': 'This clinic is not suspended.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # The subscription's own save method will handle status change back to ACTIVE
+            suspended_sub = clinic_profile.subscription_history.filter(status=SubscriptionHistory.Status.SUSPENDED).first()
+            if suspended_sub:
+                suspended_sub.comments = f"Reactivated: {comment}"
+                suspended_sub.save() # This will re-evaluate and set status to ACTIVE
+            
+            clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
+            clinic_profile.save()
+            return Response({'status': 'Clinic reactivated.'}, status=status.HTTP_200_OK)
+
+        return Response({'error': 'Invalid action. Use "suspend" or "reactivate" and provide a comment.'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
