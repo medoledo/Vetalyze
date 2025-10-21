@@ -1,9 +1,9 @@
 #accounts/urls.py
 
 from django.urls import path, include
-from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     CustomTokenObtainPairView, 
+    CustomTokenRefreshView,
     LogoutView,
     public_key_view,
     ClinicOwnerProfileListCreateView,
@@ -11,6 +11,7 @@ from .views import (
     ClinicOwnerProfileMeView,
     ChangePasswordView,
     SuspendClinicView,
+    RefundSubscriptionView,
     SubscriptionHistoryListCreateView,
     DoctorProfileListCreateView,
     DoctorProfileDetailView,
@@ -24,7 +25,7 @@ from .views import (
 
 urlpatterns = [
     path("login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("login/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path("login/refresh/", CustomTokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("public-key/", public_key_view, name="public_key"),
 
@@ -35,6 +36,7 @@ urlpatterns = [
     path('clinic-owner-profiles/<int:pk>/suspend/', SuspendClinicView.as_view(), name='clinicownerprofile-suspend'),
     path('clinic-owner-profiles/<int:pk>/change-password/', ChangePasswordView.as_view(), name='clinicownerprofile-change-password'),
     path('clinic-owner-profiles/<int:clinic_pk>/subscriptions/', SubscriptionHistoryListCreateView.as_view(), name='clinic-subscription-history'),
+    path('clinic-owner-profiles/<int:clinic_pk>/subscriptions/<int:sub_pk>/refund/', RefundSubscriptionView.as_view(), name='clinic-subscription-refund'),
 
     # Other Profiles and models
     path('doctor-profiles/', DoctorProfileListCreateView.as_view(), name='doctorprofile-list-create'),

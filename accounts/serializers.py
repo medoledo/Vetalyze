@@ -1,6 +1,6 @@
 #accounts/serializers.py
 
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework import serializers
 from datetime import date, timedelta
 from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
@@ -83,6 +83,47 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data['clinic_name'] = clinic_name
         return data
 
+
+class CustomTokenRefreshSerializer(TokenRefreshSerializer):
+    """
+    Customizes the token refresh response to include user role and clinic name,
+    similar to the login response.
+    """
+    def validate(self, attrs):
+        # The default `validate` method now returns both a new access token and a new
+        # refresh token, because `ROTATE_REFRESH_TOKENS` is set to `True`. The old
+        # refresh token is automatically blacklisted.
+        data = super().validate(attrs)
+        
+        # The `super().validate()` call returns a new access and refresh token.
+        # We can decode the new access token to get the user's ID.
+        from rest_framework_simplejwt.tokens import AccessToken
+        new_access_token = AccessToken(data['access'])
+        user_id = new_access_token.payload.get('user_id')
+        user = User.objects.get(id=user_id)
+
+        # Check if the user's own account is active
+        if not user.is_active:
+            raise serializers.ValidationError("User account is inactive.", code='authorization')
+
+        # Check the clinic's active status for all clinic-related roles
+        clinic_profile = None
+        if hasattr(user, 'clinic_owner_profile'):
+            clinic_profile = user.clinic_owner_profile
+        elif hasattr(user, 'doctor_profile') or hasattr(user, 'reception_profile'):
+            # Assuming DoctorProfile and ReceptionProfile have a 'clinic_owner_profile' FK
+            profile = getattr(user, 'doctor_profile', None) or getattr(user, 'reception_profile', None)
+            if profile:
+                clinic_profile = profile.clinic_owner_profile
+
+        if clinic_profile and not clinic_profile.is_active:
+            raise serializers.ValidationError(
+                "The clinic this account is associated with is inactive. Please contact support.", code='authorization'
+            )
+
+        data['role'] = user.role
+        data['clinic_name'] = clinic_profile.clinic_name if clinic_profile else "Vetalyze"
+        return data
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -244,7 +285,7 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
             clinic=clinic_profile,
             end_date__gte=start_date,
             start_date__lte=end_date
-        ).exclude(status__in=[SubscriptionHistory.Status.ENDED, SubscriptionHistory.Status.SUSPENDED])
+        ).exclude(status__in=[SubscriptionHistory.Status.ENDED, SubscriptionHistory.Status.SUSPENDED, SubscriptionHistory.Status.REFUNDED])
 
         if overlapping_subscriptions.exists():
             raise serializers.ValidationError("An active or upcoming subscription already exists in this date range.")

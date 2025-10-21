@@ -6,13 +6,13 @@ from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework import generics, views, status
 from rest_framework.response import Response
 from django.conf import settings
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.shortcuts import get_object_or_404, Http404
-from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, CreateSubscriptionHistorySerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer, SubscriptionHistorySerializer
+from django.db.models import Q
+from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, CreateSubscriptionHistorySerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer, SubscriptionHistorySerializer, CustomTokenRefreshSerializer
 from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 from .permissions import IsSiteOwner , IsClinicOwner, IsDoctor, IsReception
-
 
 # Create your views here.
 
@@ -26,6 +26,10 @@ def public_key_view(request):
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+
+
+class CustomTokenRefreshView(TokenRefreshView):
+    serializer_class = CustomTokenRefreshSerializer
 
 
 class LogoutView(views.APIView):
@@ -184,6 +188,41 @@ class SuspendClinicView(views.APIView):
             return Response({'status': 'Clinic reactivated.'}, status=status.HTTP_200_OK)
 
         return Response({'error': 'Invalid action. Use "suspend" or "reactivate" and provide a comment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RefundSubscriptionView(views.APIView):
+    """
+    An endpoint for Site Owners to refund a subscription.
+    - POST with {"comment": "Reason for refund."} to refund.
+    - Only ACTIVE or SUSPENDED subscriptions can be refunded.
+    """
+    permission_classes = [IsSiteOwner]
+
+    def post(self, request, *args, **kwargs):
+        subscription = get_object_or_404(SubscriptionHistory, pk=self.kwargs['sub_pk'], clinic_id=self.kwargs['clinic_pk'])
+        comment = request.data.get('comment')
+
+        if not comment or not comment.strip():
+            return Response({'error': 'A comment is required to refund a subscription.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if subscription.status not in [SubscriptionHistory.Status.ACTIVE, SubscriptionHistory.Status.SUSPENDED]:
+            return Response({'error': f'Cannot refund a subscription with status "{subscription.status}". Only ACTIVE or SUSPENDED subscriptions can be refunded.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Update the subscription
+        subscription.status = SubscriptionHistory.Status.REFUNDED
+        subscription.comments = f"Refunded: {comment}"
+        subscription.save()
+
+        # Check if the clinic has any other active or upcoming subscriptions.
+        # If not, the clinic's status becomes ENDED.
+        clinic_profile = subscription.clinic
+        if not clinic_profile.subscription_history.filter(
+            Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.UPCOMING)
+        ).exists():
+            clinic_profile.status = ClinicOwnerProfile.Status.ENDED
+            clinic_profile.save()
+
+        return Response({'status': 'Subscription has been refunded.'}, status=status.HTTP_200_OK)
 
 
 class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):

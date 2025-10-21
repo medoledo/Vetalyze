@@ -171,6 +171,7 @@ class SubscriptionHistory(models.Model):
         ACTIVE = "ACTIVE", _("Active")
         ENDED = "ENDED", _("Ended")
         SUSPENDED = "SUSPENDED", _("Suspended")
+        REFUNDED = "REFUNDED", _("Refunded")
 
     clinic = models.ForeignKey(
         ClinicOwnerProfile,
@@ -215,6 +216,7 @@ class SubscriptionHistory(models.Model):
 
         # Set status based on dates, but only if the status is not being manually set to something else
         # like SUSPENDED or ENDED.
+        # REFUNDED is also a final state, so we don't want to auto-change it.
         if self.status in [self.Status.UPCOMING, self.Status.ACTIVE]:
             today = date.today()
             if self.start_date > today:

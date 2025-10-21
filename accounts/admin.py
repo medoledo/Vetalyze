@@ -2,7 +2,7 @@
 
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
 from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 
 
@@ -102,6 +102,26 @@ def reactivate_clinics(modeladmin, request, queryset):
         profile.status = ClinicOwnerProfile.Status.ACTIVE
         profile.save()
 
+@admin.action(description='Refund active/suspended subscription for selected clinics')
+def refund_active_subscription(modeladmin, request, queryset):
+    for profile in queryset:
+        # Find an active or suspended subscription to refund
+        sub_to_refund = profile.subscription_history.filter(
+            Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.SUSPENDED)
+        ).first()
+
+        if sub_to_refund:
+            sub_to_refund.status = SubscriptionHistory.Status.REFUNDED
+            sub_to_refund.comments = f"Refunded via admin action by {request.user.username}."
+            sub_to_refund.save()
+
+            # Check if the clinic has any other active or upcoming subscriptions.
+            if not profile.subscription_history.filter(
+                Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.UPCOMING)
+            ).exists():
+                profile.status = ClinicOwnerProfile.Status.ENDED
+                profile.save()
+
 
 @admin.register(ClinicOwnerProfile)
 class ClinicOwnerProfileAdmin(admin.ModelAdmin):
@@ -110,7 +130,7 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
     readonly_fields = ('user', 'joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left')
-    actions = [make_ended, suspend_clinics, reactivate_clinics]
+    actions = [make_ended, suspend_clinics, reactivate_clinics, refund_active_subscription]
 
     def get_queryset(self, request):
         """Optimize the queryset to prevent N+1 queries."""
