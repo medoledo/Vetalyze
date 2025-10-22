@@ -280,15 +280,16 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
         subscription_type = data['subscription_type']
         end_date = start_date + timedelta(days=subscription_type.duration_days)
 
-        # Check for any subscriptions that are not 'ENDED' or 'SUSPENDED' and overlap with the new one.
+        # Check for any subscriptions that are not in a 'final' state (ENDED or REFUNDED) and would overlap.
+        # A SUSPENDED subscription should block the creation of a new one.
         overlapping_subscriptions = SubscriptionHistory.objects.filter(
             clinic=clinic_profile,
             end_date__gte=start_date,
             start_date__lte=end_date
-        ).exclude(status__in=[SubscriptionHistory.Status.ENDED, SubscriptionHistory.Status.SUSPENDED, SubscriptionHistory.Status.REFUNDED])
+        ).exclude(status__in=[SubscriptionHistory.Status.ENDED, SubscriptionHistory.Status.REFUNDED])
 
         if overlapping_subscriptions.exists():
-            raise serializers.ValidationError("An active or upcoming subscription already exists in this date range.")
+            raise serializers.ValidationError("An active or upcoming subscription already exists that overlaps with this date range. Please ensure the start date is after any existing plan's end date.")
 
         return data
 
@@ -297,8 +298,10 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
         clinic_profile = self.context['clinic_profile']
         activated_by_user = self.context['request'].user
 
-        # Deactivate any other active subscriptions for this clinic
-        SubscriptionHistory.objects.filter(clinic=clinic_profile, status=SubscriptionHistory.Status.ACTIVE).update(status=SubscriptionHistory.Status.ENDED)
+        # If the new subscription starts today (making it active), end any currently active subscription.
+        # We no longer delete upcoming subscriptions, allowing multiple to be queued.
+        if validated_data['start_date'] <= date.today():
+            SubscriptionHistory.objects.filter(clinic=clinic_profile, status=SubscriptionHistory.Status.ACTIVE).update(status=SubscriptionHistory.Status.ENDED)
 
         # Create the new subscription history
         subscription = SubscriptionHistory.objects.create(clinic=clinic_profile, activated_by=activated_by_user, **validated_data)

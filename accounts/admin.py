@@ -82,6 +82,10 @@ def make_ended(modeladmin, request, queryset):
 @admin.action(description='Suspend selected ACTIVE clinics')
 def suspend_clinics(modeladmin, request, queryset):
     for profile in queryset.filter(status=ClinicOwnerProfile.Status.ACTIVE):
+        # New Rule: Cannot suspend if there is an upcoming subscription.
+        if profile.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
+            continue # Silently skip this profile in the admin action
+
         active_sub = profile.active_subscription
         if active_sub:
             profile.status = ClinicOwnerProfile.Status.SUSPENDED
@@ -105,9 +109,9 @@ def reactivate_clinics(modeladmin, request, queryset):
 @admin.action(description='Refund active/suspended subscription for selected clinics')
 def refund_active_subscription(modeladmin, request, queryset):
     for profile in queryset:
-        # Find an active or suspended subscription to refund
+        # Find an active, suspended, or upcoming subscription to refund
         sub_to_refund = profile.subscription_history.filter(
-            Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.SUSPENDED)
+            Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.SUSPENDED) | Q(status=SubscriptionHistory.Status.UPCOMING)
         ).first()
 
         if sub_to_refund:

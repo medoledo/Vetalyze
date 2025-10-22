@@ -154,6 +154,10 @@ class SuspendClinicView(views.APIView):
             if clinic_profile.status != ClinicOwnerProfile.Status.ACTIVE:
                 return Response({'error': 'Only active clinics can be suspended.'}, status=status.HTTP_400_BAD_REQUEST)
             
+            # New Rule: Cannot suspend if there is an upcoming subscription.
+            if clinic_profile.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
+                return Response({'error': 'Cannot suspend a clinic that has an upcoming subscription.'}, status=status.HTTP_400_BAD_REQUEST)
+
             active_sub = clinic_profile.active_subscription
             if not active_sub:
                 # This case should ideally not happen if status is ACTIVE
@@ -194,7 +198,7 @@ class RefundSubscriptionView(views.APIView):
     """
     An endpoint for Site Owners to refund a subscription.
     - POST with {"comment": "Reason for refund."} to refund.
-    - Only ACTIVE or SUSPENDED subscriptions can be refunded.
+    - Only ACTIVE, SUSPENDED, or UPCOMING subscriptions can be refunded.
     """
     permission_classes = [IsSiteOwner]
 
@@ -205,8 +209,8 @@ class RefundSubscriptionView(views.APIView):
         if not comment or not comment.strip():
             return Response({'error': 'A comment is required to refund a subscription.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if subscription.status not in [SubscriptionHistory.Status.ACTIVE, SubscriptionHistory.Status.SUSPENDED]:
-            return Response({'error': f'Cannot refund a subscription with status "{subscription.status}". Only ACTIVE or SUSPENDED subscriptions can be refunded.'}, status=status.HTTP_400_BAD_REQUEST)
+        if subscription.status not in [SubscriptionHistory.Status.ACTIVE, SubscriptionHistory.Status.SUSPENDED, SubscriptionHistory.Status.UPCOMING]:
+            return Response({'error': f'Cannot refund a subscription with status "{subscription.status}". Only ACTIVE, SUSPENDED, or UPCOMING subscriptions can be refunded.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Update the subscription
         subscription.status = SubscriptionHistory.Status.REFUNDED
