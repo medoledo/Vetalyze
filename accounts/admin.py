@@ -1,5 +1,6 @@
 #accounts/admin.py
 
+from datetime import date, timedelta
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.db.models import Prefetch, Q
@@ -79,33 +80,6 @@ class CustomUserAdmin(UserAdmin):
 def make_ended(modeladmin, request, queryset):
     queryset.update(status=ClinicOwnerProfile.Status.ENDED)
 
-@admin.action(description='Suspend selected ACTIVE clinics')
-def suspend_clinics(modeladmin, request, queryset):
-    for profile in queryset.filter(status=ClinicOwnerProfile.Status.ACTIVE):
-        # New Rule: Cannot suspend if there is an upcoming subscription.
-        if profile.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
-            continue # Silently skip this profile in the admin action
-
-        active_sub = profile.active_subscription
-        if active_sub:
-            profile.status = ClinicOwnerProfile.Status.SUSPENDED
-            active_sub.status = SubscriptionHistory.Status.SUSPENDED
-            active_sub.comments = f"Suspended via admin action by {request.user.username}."
-            profile.save()
-            active_sub.save()
-
-@admin.action(description='Reactivate selected SUSPENDED clinics')
-def reactivate_clinics(modeladmin, request, queryset):
-    for profile in queryset.filter(status=ClinicOwnerProfile.Status.SUSPENDED):
-        suspended_sub = profile.subscription_history.filter(status=SubscriptionHistory.Status.SUSPENDED).first()
-        if suspended_sub:
-            # The model's save() method will handle changing the status back to ACTIVE
-            suspended_sub.comments = f"Reactivated via admin action by {request.user.username}."
-            suspended_sub.save()
-
-        profile.status = ClinicOwnerProfile.Status.ACTIVE
-        profile.save()
-
 @admin.action(description='Refund active/suspended subscription for selected clinics')
 def refund_active_subscription(modeladmin, request, queryset):
     for profile in queryset:
@@ -127,6 +101,68 @@ def refund_active_subscription(modeladmin, request, queryset):
                 profile.save()
 
 
+def _create_new_subscription_record(original_sub, new_status, comment, user):
+    """Helper to create a new subscription record based on an old one."""
+    return SubscriptionHistory.objects.create(
+        subscription_group=original_sub.subscription_group, # Keep the same group
+        clinic=original_sub.clinic,
+        subscription_type=original_sub.subscription_type,
+        payment_method=original_sub.payment_method,
+        amount_paid=original_sub.amount_paid,
+        start_date=date.today(),
+        end_date=original_sub.end_date,
+        status=new_status,
+        comments=comment,
+        activated_by=user
+    )
+
+@admin.action(description='Suspend selected ACTIVE subscriptions')
+def suspend_subscriptions(modeladmin, request, queryset):
+    for sub in queryset.filter(status=SubscriptionHistory.Status.ACTIVE):
+        # Rule: Cannot suspend if there is an upcoming subscription.
+        if sub.clinic.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
+            continue
+        
+        # End the current active subscription
+        original_end_date = sub.end_date
+        sub.end_date = date.today() - timedelta(days=1)
+        sub.status = SubscriptionHistory.Status.ENDED
+        sub.comments = f"{sub.comments}\nEnded on {date.today()} due to suspension.".strip()
+        sub.save()
+
+        # Create a new suspended record
+        comment = f"Suspended via admin action by {request.user.username}."
+        _create_new_subscription_record(sub, SubscriptionHistory.Status.SUSPENDED, comment, request.user)
+
+        sub.clinic.status = ClinicOwnerProfile.Status.SUSPENDED
+        sub.clinic.save()
+
+@admin.action(description='Reactivate selected SUSPENDED subscriptions')
+def reactivate_subscriptions(modeladmin, request, queryset):
+    for sub in queryset.filter(status=SubscriptionHistory.Status.SUSPENDED):
+        # End the current suspended subscription
+        sub.end_date = date.today() - timedelta(days=1)
+        sub.status = SubscriptionHistory.Status.ENDED
+        sub.comments = f"{sub.comments}\nEnded on {date.today()} due to reactivation.".strip()
+        sub.save()
+
+        # Create a new active record
+        comment = f"Reactivated via admin action by {request.user.username}."
+        _create_new_subscription_record(sub, SubscriptionHistory.Status.ACTIVE, comment, request.user)
+
+        sub.clinic.status = ClinicOwnerProfile.Status.ACTIVE
+        sub.clinic.save()
+
+@admin.action(description='Refund selected subscriptions')
+def refund_subscriptions(modeladmin, request, queryset):
+    for sub in queryset.filter(status__in=[SubscriptionHistory.Status.ACTIVE, SubscriptionHistory.Status.SUSPENDED, SubscriptionHistory.Status.UPCOMING]):
+        sub.status = SubscriptionHistory.Status.REFUNDED
+        sub.comments = f"Refunded via admin action by {request.user.username}."
+        sub.save()
+        if not sub.clinic.has_active_or_upcoming_subscription:
+            sub.clinic.status = ClinicOwnerProfile.Status.ENDED
+            sub.clinic.save()
+
 @admin.register(ClinicOwnerProfile)
 class ClinicOwnerProfileAdmin(admin.ModelAdmin):
     list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan', 'days_left')
@@ -134,7 +170,6 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
     readonly_fields = ('user', 'joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left')
-    actions = [make_ended, suspend_clinics, reactivate_clinics, refund_active_subscription]
 
     def get_queryset(self, request):
         """Optimize the queryset to prevent N+1 queries."""
@@ -159,10 +194,11 @@ admin.site.register(ReceptionProfile)
 
 @admin.register(SubscriptionHistory)
 class SubscriptionHistoryAdmin(admin.ModelAdmin):
-    list_display = ('clinic', 'subscription_type', 'start_date', 'end_date', 'status')
-    list_filter = ('status', 'subscription_type')
+    list_display = ('clinic', 'subscription_type', 'start_date', 'end_date', 'status', 'subscription_group')
+    list_filter = ('status', 'subscription_type', 'clinic', 'subscription_group')
     readonly_fields = ('end_date', 'days_left', 'activation_date', 'comments')
-    search_fields = ('clinic__clinic_name', 'ref_number')
+    search_fields = ('clinic__clinic_name', 'ref_number', 'subscription_group__iexact')
+    actions = [suspend_subscriptions, reactivate_subscriptions, refund_subscriptions]
 
 admin.site.register(SubscriptionType)
 admin.site.register(Country)

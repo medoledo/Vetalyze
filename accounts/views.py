@@ -134,64 +134,89 @@ class ChangePasswordView(views.APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class SuspendClinicView(views.APIView):
+class ManageSubscriptionStatusView(views.APIView):
     """
-    An endpoint for Site Owners to suspend or reactivate a clinic.
-    - POST with {"action": "suspend", "comment": "Reason for suspension."} to suspend.
-    - POST with {"action": "reactivate", "comment": "Reason for reactivating."} to reactivate.
+    An endpoint for Site Owners to manage a subscription's status.
+    - POST with {"action": "suspend", "comment": "..."} to suspend an ACTIVE subscription.
+    - POST with {"action": "reactivate", "comment": "..."} to reactivate a SUSPENDED subscription.
     """
     permission_classes = [IsSiteOwner]
 
     def post(self, request, *args, **kwargs):
-        clinic_profile = get_object_or_404(ClinicOwnerProfile, pk=self.kwargs['pk'])
+        from datetime import date, timedelta
+        subscription = get_object_or_404(SubscriptionHistory, pk=self.kwargs['sub_pk'], clinic_id=self.kwargs['clinic_pk'])
         action = request.data.get('action')
+        comment = request.data.get('comment')
+
+        if not comment or not comment.strip():
+            return Response({'error': f'A comment is required to {action} a subscription.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        clinic_profile = subscription.clinic
 
         if action == 'suspend':
-            comment = request.data.get('comment')
-            if not comment or not comment.strip():
-                return Response({'error': 'A comment is required to suspend a clinic.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            if clinic_profile.status != ClinicOwnerProfile.Status.ACTIVE:
-                return Response({'error': 'Only active clinics can be suspended.'}, status=status.HTTP_400_BAD_REQUEST)
+            if subscription.status != SubscriptionHistory.Status.ACTIVE:
+                return Response({'error': 'Only ACTIVE subscriptions can be suspended.'}, status=status.HTTP_400_BAD_REQUEST)
             
-            # New Rule: Cannot suspend if there is an upcoming subscription.
             if clinic_profile.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
-                return Response({'error': 'Cannot suspend a clinic that has an upcoming subscription.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'Cannot suspend a subscription for a clinic that has an upcoming plan.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            active_sub = clinic_profile.active_subscription
-            if not active_sub:
-                # This case should ideally not happen if status is ACTIVE
-                return Response({'error': 'No active subscription found to suspend.'}, status=status.HTTP_400_BAD_REQUEST)
+            # End the current active subscription
+            original_end_date = subscription.end_date
+            subscription.end_date = date.today() - timedelta(days=1)
+            subscription.status = SubscriptionHistory.Status.ENDED
+            subscription.comments = f"{subscription.comments}\nEnded due to suspension on {date.today()}.".strip()
+            subscription.save()
 
-            # Update statuses
+            # Create a new record for the suspension
+            SubscriptionHistory.objects.create(
+                subscription_group=subscription.subscription_group, # Keep the same group
+                clinic=clinic_profile,
+                subscription_type=subscription.subscription_type,
+                payment_method=subscription.payment_method,
+                amount_paid=subscription.amount_paid, # Or 0 if this is a new transaction
+                start_date=date.today(),
+                end_date=original_end_date,
+                status=SubscriptionHistory.Status.SUSPENDED,
+                comments=f"Suspended: {comment}",
+                activated_by=request.user
+            )
+
+            subscription.status = SubscriptionHistory.Status.SUSPENDED
+            subscription.comments = f"Suspended: {comment}"
             clinic_profile.status = ClinicOwnerProfile.Status.SUSPENDED
-            active_sub.status = SubscriptionHistory.Status.SUSPENDED
-            active_sub.comments = f"Suspended: {comment}"
-            
             clinic_profile.save()
-            active_sub.save()
-            
-            return Response({'status': 'Clinic and subscription suspended.'}, status=status.HTTP_200_OK)
+            return Response({'status': 'Subscription and clinic suspended.'}, status=status.HTTP_200_OK)
 
         elif action == 'reactivate':
-            comment = request.data.get('comment')
-            if not comment or not comment.strip():
-                return Response({'error': 'A comment is required to reactivate a clinic.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            if clinic_profile.status != ClinicOwnerProfile.Status.SUSPENDED:
-                return Response({'error': 'This clinic is not suspended.'}, status=status.HTTP_400_BAD_REQUEST)
+            if subscription.status != SubscriptionHistory.Status.SUSPENDED:
+                return Response({'error': 'Only SUSPENDED subscriptions can be reactivated.'}, status=status.HTTP_400_BAD_REQUEST)
             
-            # The subscription's own save method will handle status change back to ACTIVE
-            suspended_sub = clinic_profile.subscription_history.filter(status=SubscriptionHistory.Status.SUSPENDED).first()
-            if suspended_sub:
-                suspended_sub.comments = f"Reactivated: {comment}"
-                suspended_sub.save() # This will re-evaluate and set status to ACTIVE
+            # End the current suspended subscription
+            original_end_date = subscription.end_date
+            subscription.end_date = date.today() - timedelta(days=1)
+            subscription.status = SubscriptionHistory.Status.ENDED
+            subscription.comments = f"{subscription.comments}\nEnded due to reactivation on {date.today()}.".strip()
+            subscription.save()
+
+            # Create a new record for the activation
+            new_active_sub = SubscriptionHistory.objects.create(
+                subscription_group=subscription.subscription_group, # Keep the same group
+                clinic=clinic_profile,
+                subscription_type=subscription.subscription_type,
+                payment_method=subscription.payment_method,
+                amount_paid=subscription.amount_paid, # Or 0
+                start_date=date.today(),
+                end_date=original_end_date,
+                status=SubscriptionHistory.Status.ACTIVE,
+                comments=f"Reactivated: {comment}",
+                activated_by=request.user
+            )
             
             clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
             clinic_profile.save()
-            return Response({'status': 'Clinic reactivated.'}, status=status.HTTP_200_OK)
+            return Response({'status': 'Subscription and clinic reactivated.'}, status=status.HTTP_200_OK)
 
-        return Response({'error': 'Invalid action. Use "suspend" or "reactivate" and provide a comment.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'Invalid action. Use "suspend" or "reactivate".'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class RefundSubscriptionView(views.APIView):

@@ -1,5 +1,6 @@
 #accounts/models.py
 
+import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from datetime import date, timedelta
@@ -173,6 +174,7 @@ class SubscriptionHistory(models.Model):
         SUSPENDED = "SUSPENDED", _("Suspended")
         REFUNDED = "REFUNDED", _("Refunded")
 
+    subscription_group = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True, help_text="Identifier to group related subscription records together.")
     clinic = models.ForeignKey(
         ClinicOwnerProfile,
         on_delete=models.CASCADE,
@@ -210,14 +212,13 @@ class SubscriptionHistory(models.Model):
         - Automatically calculate the end_date based on subscription duration.
         - Automatically set the status based on the start_date.
         """
-        # Calculate end_date if it's not set
+        # Calculate end_date on creation if it's not set
         if not self.end_date and self.subscription_type:
             self.end_date = self.start_date + timedelta(days=self.subscription_type.duration_days)
 
-        # Set status based on dates, but only if the status is not being manually set to something else
-        # like SUSPENDED or ENDED.
-        # REFUNDED is also a final state, so we don't want to auto-change it.
-        if self.status in [self.Status.UPCOMING, self.Status.ACTIVE]:
+        # On creation, determine if the subscription should be UPCOMING or ACTIVE
+        # based on its start date, unless a specific status is already provided.
+        if self.pk is None and self.status == self.Status.UPCOMING:
             today = date.today()
             if self.start_date > today:
                 self.status = self.Status.UPCOMING

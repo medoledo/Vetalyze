@@ -168,7 +168,7 @@ class SubscriptionHistorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SubscriptionHistory
-        fields = ['id', 'subscription_type', 'payment_method', 'activated_by', 'days_left', 'extra_accounts_number', 'ref_number', 'amount_paid', 'comments', 'activation_date', 'start_date', 'end_date', 'status', 'clinic']
+        fields = ['id', 'subscription_group', 'subscription_type', 'payment_method', 'activated_by', 'days_left', 'extra_accounts_number', 'ref_number', 'amount_paid', 'comments', 'activation_date', 'start_date', 'end_date', 'status', 'clinic']
 
 
 class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
