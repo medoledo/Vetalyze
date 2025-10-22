@@ -65,7 +65,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if hasattr(user, 'clinic_owner_profile'):
             clinic_profile = user.clinic_owner_profile
         elif hasattr(user, 'doctor_profile') or hasattr(user, 'reception_profile'):
-            clinic_profile = user.profile.clinic_owner_profile
+            profile = getattr(user, 'doctor_profile', None) or getattr(user, 'reception_profile', None)
+            if profile:
+                clinic_profile = profile.clinic_owner_profile
 
         clinic_is_active = clinic_profile.is_active if clinic_profile else True
         if not clinic_is_active:
@@ -111,7 +113,7 @@ class CustomTokenRefreshSerializer(TokenRefreshSerializer):
         if hasattr(user, 'clinic_owner_profile'):
             clinic_profile = user.clinic_owner_profile
         elif hasattr(user, 'doctor_profile') or hasattr(user, 'reception_profile'):
-            # Assuming DoctorProfile and ReceptionProfile have a 'clinic_owner_profile' FK
+            # DoctorProfile and ReceptionProfile have a 'clinic_owner_profile' FK
             profile = getattr(user, 'doctor_profile', None) or getattr(user, 'reception_profile', None)
             if profile:
                 clinic_profile = profile.clinic_owner_profile
