@@ -312,6 +312,20 @@ class DoctorProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
         return DoctorProfile.objects.none()
 
 
+class DoctorProfileMeView(generics.RetrieveAPIView):
+    """
+    An endpoint for a doctor to access their own profile data.
+    """
+    permission_classes = [IsDoctor]
+    serializer_class = DoctorProfileSerializer
+
+    def get_object(self):
+        try:
+            return self.request.user.doctor_profile
+        except DoctorProfile.DoesNotExist:
+            raise Http404("Doctor profile not found for this user.")
+
+
 class ReceptionProfileListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsClinicOwner]
     serializer_class = ReceptionProfileSerializer
@@ -338,6 +352,20 @@ class ReceptionProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
         elif user.role == User.Role.RECEPTION:
             return ReceptionProfile.objects.filter(user=user).select_related('user')
         return ReceptionProfile.objects.none()
+
+
+class ReceptionProfileMeView(generics.RetrieveAPIView):
+    """
+    An endpoint for a receptionist to access their own profile data.
+    """
+    permission_classes = [IsReception]
+    serializer_class = ReceptionProfileSerializer
+
+    def get_object(self):
+        try:
+            return self.request.user.reception_profile
+        except ReceptionProfile.DoesNotExist:
+            raise Http404("Reception profile not found for this user.")
 
 
 class SubscriptionTypeListCreateView(generics.ListCreateAPIView):

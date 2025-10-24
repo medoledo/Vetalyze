@@ -15,8 +15,10 @@ from .views import (
     SubscriptionHistoryListCreateView,
     DoctorProfileListCreateView,
     DoctorProfileDetailView,
+    DoctorProfileMeView,
     ReceptionProfileListCreateView,
     ReceptionProfileDetailView,
+    ReceptionProfileMeView,
     SubscriptionTypeListCreateView,
     SubscriptionTypeDetailView,
     PaymentMethodListCreateView,
@@ -40,8 +42,10 @@ urlpatterns = [
 
     # Other Profiles and models
     path('doctor-profiles/', DoctorProfileListCreateView.as_view(), name='doctorprofile-list-create'),
+    path('doctor-profiles/me/', DoctorProfileMeView.as_view(), name='doctorprofile-me'),
     path('doctor-profiles/<int:pk>/', DoctorProfileDetailView.as_view(), name='doctorprofile-detail'),
     path('reception-profiles/', ReceptionProfileListCreateView.as_view(), name='receptionprofile-list-create'),
+    path('reception-profiles/me/', ReceptionProfileMeView.as_view(), name='receptionprofile-me'),
     path('reception-profiles/<int:pk>/', ReceptionProfileDetailView.as_view(), name='receptionprofile-detail'),
     path('subscription-types/', SubscriptionTypeListCreateView.as_view(), name='subscriptiontype-list-create'),
     path('subscription-types/<int:pk>/', SubscriptionTypeDetailView.as_view(), name='subscriptiontype-detail'),
