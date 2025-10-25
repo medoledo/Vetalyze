@@ -3,9 +3,13 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 from rest_framework import serializers
 from datetime import date, timedelta
-from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
-
+from django.db import transaction
 from django.db.models import Q
+from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
+from .exceptions import InactiveUserError, InactiveClinicError, OverlappingSubscriptionError, SuspendedClinicError
+import logging
+
+logger = logging.getLogger(__name__)
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
@@ -19,46 +23,18 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
-        # Run a subscription status check for all clinics on every login.
-        # This is an alternative to a cron job running a management command.
-        today = date.today()
-
-        # 1. Handle newly active subscriptions
-        upcoming_to_activate = SubscriptionHistory.objects.filter(
-            status=SubscriptionHistory.Status.UPCOMING,
-            start_date__lte=today
-        )
-        for sub in upcoming_to_activate:
-            # Deactivate any other currently active subscription for the same clinic
-            SubscriptionHistory.objects.filter(
-                clinic=sub.clinic, status=SubscriptionHistory.Status.ACTIVE
-            ).update(status=SubscriptionHistory.Status.ENDED)
-
-            # Activate the new subscription and the clinic
-            sub.status = SubscriptionHistory.Status.ACTIVE
-            sub.save()
-            sub.clinic.status = ClinicOwnerProfile.Status.ACTIVE
-            sub.clinic.save()
-
-        # 2. Handle expired subscriptions
-        expired_subscriptions = SubscriptionHistory.objects.filter(
-            status=SubscriptionHistory.Status.ACTIVE,
-            end_date__lt=today
-        )
-        for sub in expired_subscriptions:
-            sub.status = SubscriptionHistory.Status.ENDED
-            sub.save()
-            # If the clinic has no other active or upcoming subscriptions, set its status to ENDED
-            if not sub.clinic.subscription_history.filter(Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.UPCOMING)).exists():
-                sub.clinic.status = ClinicOwnerProfile.Status.ENDED
-                sub.clinic.save()
-
+        """
+        Validate login credentials and check user/clinic status.
+        Note: Subscription status updates are now handled by a background task
+        (management command: update_subscription_statuses) that runs daily at 12:01 AM.
+        """
         data = super().validate(attrs)
         user = self.user
 
         # Check if the user's own account is active
         if not user.is_active:
-            raise serializers.ValidationError("User account is inactive.", code='authorization')
+            logger.warning(f"Login attempt for inactive user: {user.username}")
+            raise InactiveUserError("Your account has been deactivated. Please contact support.")
 
         # Check the clinic's active status for all clinic-related roles
         clinic_profile = None
@@ -69,20 +45,20 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             if profile:
                 clinic_profile = profile.clinic_owner_profile
 
-        clinic_is_active = clinic_profile.is_active if clinic_profile else True
-        if not clinic_is_active:
-            raise serializers.ValidationError(
-                "The clinic this account is associated with is inactive. Please contact support.", code='authorization'
-            )
+        # Verify clinic status
+        if clinic_profile:
+            if not clinic_profile.is_active:
+                logger.warning(
+                    f"Login attempt for user {user.username} with inactive clinic: {clinic_profile.clinic_name}"
+                )
+                raise InactiveClinicError(
+                    "The clinic associated with this account is inactive. Please contact support."
+                )
 
         data['role'] = user.role
-
-        # Add clinic_name to the response data
-        clinic_name = "Vetalyze"  # Default for Admin/Site Owner
-        if clinic_profile:
-            clinic_name = clinic_profile.clinic_name
+        data['clinic_name'] = clinic_profile.clinic_name if clinic_profile else "Vetalyze"
         
-        data['clinic_name'] = clinic_name
+        logger.info(f"Successful login for user: {user.username}")
         return data
 
 
@@ -92,35 +68,45 @@ class CustomTokenRefreshSerializer(TokenRefreshSerializer):
     similar to the login response.
     """
     def validate(self, attrs):
-        # The default `validate` method now returns both a new access token and a new
-        # refresh token, because `ROTATE_REFRESH_TOKENS` is set to `True`. The old
-        # refresh token is automatically blacklisted.
+        """
+        Validate token refresh and check user/clinic status.
+        """
         data = super().validate(attrs)
         
-        # The `super().validate()` call returns a new access and refresh token.
-        # We can decode the new access token to get the user's ID.
+        # Decode the new access token to get the user's ID
         from rest_framework_simplejwt.tokens import AccessToken
         new_access_token = AccessToken(data['access'])
         user_id = new_access_token.payload.get('user_id')
-        user = User.objects.get(id=user_id)
+        
+        try:
+            user = User.objects.select_related(
+                'clinic_owner_profile',
+                'doctor_profile__clinic_owner_profile',
+                'reception_profile__clinic_owner_profile'
+            ).get(id=user_id)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("User not found.", code='authorization')
 
-        # Check if the user's own account is active
+        # Check if the user's account is active
         if not user.is_active:
-            raise serializers.ValidationError("User account is inactive.", code='authorization')
+            logger.warning(f"Token refresh attempt for inactive user: {user.username}")
+            raise InactiveUserError("Your account has been deactivated. Please contact support.")
 
-        # Check the clinic's active status for all clinic-related roles
+        # Check the clinic's active status
         clinic_profile = None
         if hasattr(user, 'clinic_owner_profile'):
             clinic_profile = user.clinic_owner_profile
         elif hasattr(user, 'doctor_profile') or hasattr(user, 'reception_profile'):
-            # DoctorProfile and ReceptionProfile have a 'clinic_owner_profile' FK
             profile = getattr(user, 'doctor_profile', None) or getattr(user, 'reception_profile', None)
             if profile:
                 clinic_profile = profile.clinic_owner_profile
 
         if clinic_profile and not clinic_profile.is_active:
-            raise serializers.ValidationError(
-                "The clinic this account is associated with is inactive. Please contact support.", code='authorization'
+            logger.warning(
+                f"Token refresh for user {user.username} with inactive clinic: {clinic_profile.clinic_name}"
+            )
+            raise InactiveClinicError(
+                "The clinic associated with this account is inactive. Please contact support."
             )
 
         data['role'] = user.role
@@ -210,14 +196,29 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
             ret.pop('subscription_history', None)
         return ret
 
+    @transaction.atomic
     def create(self, validated_data):
+        """
+        Create a new clinic owner profile with atomic transaction to ensure data integrity.
+        """
         user_data = validated_data.pop('user')
         user_data['role'] = User.Role.CLINIC_OWNER
-        user = UserSerializer().create(validated_data=user_data)
         
-        # The 'added_by' field is expected to be passed in from the view.
-        profile = ClinicOwnerProfile.objects.create(user=user, **validated_data)
-        return profile
+        try:
+            # Create user account
+            user = UserSerializer().create(validated_data=user_data)
+            
+            # Create clinic profile
+            profile = ClinicOwnerProfile.objects.create(user=user, **validated_data)
+            
+            logger.info(f"Created clinic owner profile: {profile.clinic_name} (User: {user.username})")
+            return profile
+            
+        except Exception as e:
+            logger.error(f"Failed to create clinic owner profile: {str(e)}")
+            raise serializers.ValidationError(
+                f"Failed to create clinic owner profile. Please try again or contact support."
+            )
 
     def update(self, instance, validated_data):
         validated_data.pop('user', None)
@@ -271,19 +272,30 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         """
-        Check for overlapping subscriptions.
+        Validate subscription creation with comprehensive checks.
         """
         clinic_profile = self.context['clinic_profile']
 
+        # Prevent creating subscriptions for suspended clinics
         if clinic_profile.status == ClinicOwnerProfile.Status.SUSPENDED:
-            raise serializers.ValidationError("Cannot create a new subscription for a suspended clinic. Please reactivate it first.")
+            logger.warning(
+                f"Attempt to create subscription for suspended clinic: {clinic_profile.clinic_name}"
+            )
+            raise SuspendedClinicError(
+                "Cannot create a new subscription for a suspended clinic. Please reactivate it first."
+            )
 
         start_date = data['start_date']
         subscription_type = data['subscription_type']
         end_date = start_date + timedelta(days=subscription_type.duration_days)
 
-        # Check for any subscriptions that are not in a 'final' state (ENDED or REFUNDED) and would overlap.
-        # A SUSPENDED subscription should block the creation of a new one.
+        # Validate start date is not in the past
+        if start_date < date.today():
+            raise serializers.ValidationError({
+                "start_date": "Subscription start date cannot be in the past."
+            })
+
+        # Check for overlapping subscriptions
         overlapping_subscriptions = SubscriptionHistory.objects.filter(
             clinic=clinic_profile,
             end_date__gte=start_date,
@@ -291,29 +303,62 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
         ).exclude(status__in=[SubscriptionHistory.Status.ENDED, SubscriptionHistory.Status.REFUNDED])
 
         if overlapping_subscriptions.exists():
-            raise serializers.ValidationError("An active or upcoming subscription already exists that overlaps with this date range. Please ensure the start date is after any existing plan's end date.")
+            logger.warning(
+                f"Overlapping subscription attempt for clinic: {clinic_profile.clinic_name}"
+            )
+            raise OverlappingSubscriptionError(
+                "An active or upcoming subscription already exists that overlaps with this date range. "
+                "Please ensure the start date is after any existing plan's end date."
+            )
+
+        # Validate amount paid
+        if data.get('amount_paid', 0) < 0:
+            raise serializers.ValidationError({
+                "amount_paid": "Amount paid cannot be negative."
+            })
 
         return data
 
+    @transaction.atomic
     def create(self, validated_data):
-        # clinic and activated_by are set in the view
+        """
+        Create a new subscription with atomic transaction to ensure data integrity.
+        """
         clinic_profile = self.context['clinic_profile']
         activated_by_user = self.context['request'].user
 
-        # If the new subscription starts today (making it active), end any currently active subscription.
-        # We no longer delete upcoming subscriptions, allowing multiple to be queued.
-        if validated_data['start_date'] <= date.today():
-            SubscriptionHistory.objects.filter(clinic=clinic_profile, status=SubscriptionHistory.Status.ACTIVE).update(status=SubscriptionHistory.Status.ENDED)
+        try:
+            # If the new subscription starts today, end any currently active subscription
+            if validated_data['start_date'] <= date.today():
+                SubscriptionHistory.objects.filter(
+                    clinic=clinic_profile,
+                    status=SubscriptionHistory.Status.ACTIVE
+                ).update(status=SubscriptionHistory.Status.ENDED)
 
-        # Create the new subscription history
-        subscription = SubscriptionHistory.objects.create(clinic=clinic_profile, activated_by=activated_by_user, **validated_data)
+            # Create the new subscription
+            subscription = SubscriptionHistory.objects.create(
+                clinic=clinic_profile,
+                activated_by=activated_by_user,
+                **validated_data
+            )
 
-        # Update the clinic's status to ACTIVE if the new subscription is active now
-        if subscription.status == SubscriptionHistory.Status.ACTIVE:
-            clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
-            clinic_profile.save()
-        
-        return subscription
+            # Update clinic status if subscription is active
+            if subscription.status == SubscriptionHistory.Status.ACTIVE:
+                clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
+                clinic_profile.save(update_fields=['status'])
+            
+            logger.info(
+                f"Created subscription for clinic {clinic_profile.clinic_name}: "
+                f"{subscription.subscription_type.name} (Status: {subscription.status})"
+            )
+            
+            return subscription
+            
+        except Exception as e:
+            logger.error(f"Failed to create subscription: {str(e)}")
+            raise serializers.ValidationError(
+                "Failed to create subscription. Please try again or contact support."
+            )
 
 
 class DoctorProfileSerializer(serializers.ModelSerializer):

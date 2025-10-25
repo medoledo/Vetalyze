@@ -1,18 +1,29 @@
 #accounts/views.py
 
 from django.shortcuts import render
+from django.shortcuts import get_object_or_404, Http404
+from django.conf import settings
+from django.db import transaction
+from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
-from rest_framework import generics, views, status
+from rest_framework import generics, views, status, pagination
 from rest_framework.response import Response
-from django.conf import settings
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.shortcuts import get_object_or_404, Http404
-from django.db.models import Q
-from .serializers import CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, CreateSubscriptionHistorySerializer, DoctorProfileSerializer, ReceptionProfileSerializer, SubscriptionTypeSerializer, PaymentMethodSerializer, ChangePasswordSerializer, SubscriptionHistorySerializer, CustomTokenRefreshSerializer
+from .serializers import (
+    CustomTokenObtainPairSerializer, ClinicOwnerProfileSerializer, 
+    CreateSubscriptionHistorySerializer, DoctorProfileSerializer, 
+    ReceptionProfileSerializer, SubscriptionTypeSerializer, 
+    PaymentMethodSerializer, ChangePasswordSerializer, 
+    SubscriptionHistorySerializer, CustomTokenRefreshSerializer
+)
 from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
-from .permissions import IsSiteOwner , IsClinicOwner, IsDoctor, IsReception
+from .permissions import IsSiteOwner, IsClinicOwner, IsDoctor, IsReception
+from .exceptions import InvalidSubscriptionStatusError, PaginationBypassError
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Create your views here.
 
@@ -41,12 +52,29 @@ class LogoutView(views.APIView):
 
     def post(self, request):
         try:
-            refresh_token = request.data["refresh"]
+            refresh_token = request.data.get("refresh")
+            
+            if not refresh_token:
+                return Response(
+                    {"error": "Refresh token is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             token = RefreshToken(refresh_token)
             token.blacklist()
-            return Response(status=status.HTTP_205_RESET_CONTENT)
+            
+            logger.info(f"User {request.user.username} logged out successfully")
+            return Response(
+                {"message": "Successfully logged out."},
+                status=status.HTTP_205_RESET_CONTENT
+            )
+            
         except Exception as e:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
+            logger.error(f"Logout error for user {request.user.username}: {str(e)}")
+            return Response(
+                {"error": "Invalid or expired refresh token."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 
@@ -115,23 +143,62 @@ class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
 class ChangePasswordView(views.APIView):
     """
     An endpoint for changing a user's password.
+    - Clinic owners can change their own password.
+    - Site owners can change any clinic owner's password.
     """
     permission_classes = [IsSiteOwner | IsClinicOwner]
 
+    @transaction.atomic
     def post(self, request, *args, **kwargs):
-        profile = get_object_or_404(ClinicOwnerProfile, pk=self.kwargs['pk'])
+        try:
+            profile = get_object_or_404(
+                ClinicOwnerProfile.objects.select_related('user'),
+                pk=self.kwargs['pk']
+            )
+        except Http404:
+            return Response(
+                {'error': 'Clinic profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
         user_to_update = profile.user
 
-        # Security check
+        # Security check - clinic owners can only change their own password
         if request.user.role == User.Role.CLINIC_OWNER and user_to_update != request.user:
-            return Response({'error': 'You can only change your own password.'}, status=status.HTTP_403_FORBIDDEN)
+            logger.warning(
+                f"Unauthorized password change attempt by {request.user.username} "
+                f"for user {user_to_update.username}"
+            )
+            return Response(
+                {'error': 'You can only change your own password.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            user_to_update.set_password(serializer.validated_data['new_password'])
-            user_to_update.save()
-            return Response({'status': 'password set'}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            new_password = serializer.validated_data['new_password']
+            user_to_update.set_password(new_password)
+            user_to_update.save(update_fields=['password'])
+            
+            logger.info(
+                f"Password changed for user {user_to_update.username} by {request.user.username}"
+            )
+            
+            return Response(
+                {'message': 'Password changed successfully.'},
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to change password for user {user_to_update.username}: {str(e)}")
+            return Response(
+                {'error': 'Failed to change password. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class ManageSubscriptionStatusView(views.APIView):
@@ -144,79 +211,154 @@ class ManageSubscriptionStatusView(views.APIView):
 
     def post(self, request, *args, **kwargs):
         from datetime import date, timedelta
-        subscription = get_object_or_404(SubscriptionHistory, pk=self.kwargs['sub_pk'], clinic_id=self.kwargs['clinic_pk'])
+        
+        try:
+            subscription = get_object_or_404(
+                SubscriptionHistory.objects.select_related('clinic'),
+                pk=self.kwargs['sub_pk'],
+                clinic_id=self.kwargs['clinic_pk']
+            )
+        except Http404:
+            return Response(
+                {'error': 'Subscription not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
         action = request.data.get('action')
-        comment = request.data.get('comment')
+        comment = request.data.get('comment', '').strip()
 
-        if not comment or not comment.strip():
-            return Response({'error': f'A comment is required to {action} a subscription.'}, status=status.HTTP_400_BAD_REQUEST)
+        # Validation
+        if not action:
+            return Response(
+                {'error': 'Action is required. Use "suspend" or "reactivate".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not comment:
+            return Response(
+                {'error': f'A comment is required to {action} a subscription.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         clinic_profile = subscription.clinic
 
         if action == 'suspend':
-            if subscription.status != SubscriptionHistory.Status.ACTIVE:
-                return Response({'error': 'Only ACTIVE subscriptions can be suspended.'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            if clinic_profile.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
-                return Response({'error': 'Cannot suspend a subscription for a clinic that has an upcoming plan.'}, status=status.HTTP_400_BAD_REQUEST)
+            return self._handle_suspend(subscription, clinic_profile, comment, request.user)
+        elif action == 'reactivate':
+            return self._handle_reactivate(subscription, clinic_profile, comment, request.user)
+        else:
+            return Response(
+                {'error': 'Invalid action. Use "suspend" or "reactivate".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
+    @transaction.atomic
+    def _handle_suspend(self, subscription, clinic_profile, comment, user):
+        """Handle subscription suspension with atomic transaction."""
+        from datetime import date, timedelta
+        
+        if subscription.status != SubscriptionHistory.Status.ACTIVE:
+            raise InvalidSubscriptionStatusError('Only ACTIVE subscriptions can be suspended.')
+        
+        if clinic_profile.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
+            return Response(
+                {'error': 'Cannot suspend a subscription for a clinic that has an upcoming plan.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
             # End the current active subscription
             original_end_date = subscription.end_date
             subscription.end_date = date.today() - timedelta(days=1)
             subscription.status = SubscriptionHistory.Status.ENDED
             subscription.comments = f"{subscription.comments}\nEnded due to suspension on {date.today()}.".strip()
-            subscription.save()
+            subscription.save(update_fields=['end_date', 'status', 'comments'])
 
             # Create a new record for the suspension
             SubscriptionHistory.objects.create(
-                subscription_group=subscription.subscription_group, # Keep the same group
+                subscription_group=subscription.subscription_group,
                 clinic=clinic_profile,
                 subscription_type=subscription.subscription_type,
                 payment_method=subscription.payment_method,
-                amount_paid=subscription.amount_paid, # Or 0 if this is a new transaction
+                amount_paid=subscription.amount_paid,
                 start_date=date.today(),
                 end_date=original_end_date,
                 status=SubscriptionHistory.Status.SUSPENDED,
                 comments=f"Suspended: {comment}",
-                activated_by=request.user
+                activated_by=user
             )
 
-            subscription.status = SubscriptionHistory.Status.SUSPENDED
-            subscription.comments = f"Suspended: {comment}"
+            # Update clinic status
             clinic_profile.status = ClinicOwnerProfile.Status.SUSPENDED
-            clinic_profile.save()
-            return Response({'status': 'Subscription and clinic suspended.'}, status=status.HTTP_200_OK)
-
-        elif action == 'reactivate':
-            if subscription.status != SubscriptionHistory.Status.SUSPENDED:
-                return Response({'error': 'Only SUSPENDED subscriptions can be reactivated.'}, status=status.HTTP_400_BAD_REQUEST)
+            clinic_profile.save(update_fields=['status'])
             
+            logger.info(
+                f"Subscription {subscription.id} suspended by {user.username} "
+                f"for clinic {clinic_profile.clinic_name}"
+            )
+            
+            return Response(
+                {'message': 'Subscription and clinic suspended successfully.'},
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to suspend subscription {subscription.id}: {str(e)}")
+            return Response(
+                {'error': 'Failed to suspend subscription. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @transaction.atomic
+    def _handle_reactivate(self, subscription, clinic_profile, comment, user):
+        """Handle subscription reactivation with atomic transaction."""
+        from datetime import date, timedelta
+        
+        if subscription.status != SubscriptionHistory.Status.SUSPENDED:
+            raise InvalidSubscriptionStatusError('Only SUSPENDED subscriptions can be reactivated.')
+        
+        try:
             # End the current suspended subscription
             original_end_date = subscription.end_date
             subscription.end_date = date.today() - timedelta(days=1)
             subscription.status = SubscriptionHistory.Status.ENDED
             subscription.comments = f"{subscription.comments}\nEnded due to reactivation on {date.today()}.".strip()
-            subscription.save()
+            subscription.save(update_fields=['end_date', 'status', 'comments'])
 
             # Create a new record for the activation
-            new_active_sub = SubscriptionHistory.objects.create(
-                subscription_group=subscription.subscription_group, # Keep the same group
+            SubscriptionHistory.objects.create(
+                subscription_group=subscription.subscription_group,
                 clinic=clinic_profile,
                 subscription_type=subscription.subscription_type,
                 payment_method=subscription.payment_method,
-                amount_paid=subscription.amount_paid, # Or 0
+                amount_paid=subscription.amount_paid,
                 start_date=date.today(),
                 end_date=original_end_date,
                 status=SubscriptionHistory.Status.ACTIVE,
                 comments=f"Reactivated: {comment}",
-                activated_by=request.user
+                activated_by=user
             )
             
+            # Update clinic status
             clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
-            clinic_profile.save()
-            return Response({'status': 'Subscription and clinic reactivated.'}, status=status.HTTP_200_OK)
-
-        return Response({'error': 'Invalid action. Use "suspend" or "reactivate".'}, status=status.HTTP_400_BAD_REQUEST)
+            clinic_profile.save(update_fields=['status'])
+            
+            logger.info(
+                f"Subscription {subscription.id} reactivated by {user.username} "
+                f"for clinic {clinic_profile.clinic_name}"
+            )
+            
+            return Response(
+                {'message': 'Subscription and clinic reactivated successfully.'},
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to reactivate subscription {subscription.id}: {str(e)}")
+            return Response(
+                {'error': 'Failed to reactivate subscription. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class RefundSubscriptionView(views.APIView):
@@ -227,31 +369,76 @@ class RefundSubscriptionView(views.APIView):
     """
     permission_classes = [IsSiteOwner]
 
+    @transaction.atomic
     def post(self, request, *args, **kwargs):
-        subscription = get_object_or_404(SubscriptionHistory, pk=self.kwargs['sub_pk'], clinic_id=self.kwargs['clinic_pk'])
-        comment = request.data.get('comment')
+        try:
+            subscription = get_object_or_404(
+                SubscriptionHistory.objects.select_related('clinic'),
+                pk=self.kwargs['sub_pk'],
+                clinic_id=self.kwargs['clinic_pk']
+            )
+        except Http404:
+            return Response(
+                {'error': 'Subscription not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        comment = request.data.get('comment', '').strip()
 
-        if not comment or not comment.strip():
-            return Response({'error': 'A comment is required to refund a subscription.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not comment:
+            return Response(
+                {'error': 'A comment is required to refund a subscription.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if subscription.status not in [SubscriptionHistory.Status.ACTIVE, SubscriptionHistory.Status.SUSPENDED, SubscriptionHistory.Status.UPCOMING]:
-            return Response({'error': f'Cannot refund a subscription with status "{subscription.status}". Only ACTIVE, SUSPENDED, or UPCOMING subscriptions can be refunded.'}, status=status.HTTP_400_BAD_REQUEST)
+        refundable_statuses = [
+            SubscriptionHistory.Status.ACTIVE,
+            SubscriptionHistory.Status.SUSPENDED,
+            SubscriptionHistory.Status.UPCOMING
+        ]
+        
+        if subscription.status not in refundable_statuses:
+            return Response(
+                {
+                    'error': f'Cannot refund a subscription with status "{subscription.status}". '
+                             f'Only ACTIVE, SUSPENDED, or UPCOMING subscriptions can be refunded.'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Update the subscription
-        subscription.status = SubscriptionHistory.Status.REFUNDED
-        subscription.comments = f"Refunded: {comment}"
-        subscription.save()
+        try:
+            # Update the subscription
+            subscription.status = SubscriptionHistory.Status.REFUNDED
+            subscription.comments = f"{subscription.comments}\nRefunded: {comment}".strip()
+            subscription.save(update_fields=['status', 'comments'])
 
-        # Check if the clinic has any other active or upcoming subscriptions.
-        # If not, the clinic's status becomes ENDED.
-        clinic_profile = subscription.clinic
-        if not clinic_profile.subscription_history.filter(
-            Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.UPCOMING)
-        ).exists():
-            clinic_profile.status = ClinicOwnerProfile.Status.ENDED
-            clinic_profile.save()
+            # Check if the clinic has any other active or upcoming subscriptions
+            clinic_profile = subscription.clinic
+            has_active_or_upcoming = clinic_profile.subscription_history.filter(
+                Q(status=SubscriptionHistory.Status.ACTIVE) | 
+                Q(status=SubscriptionHistory.Status.UPCOMING)
+            ).exists()
+            
+            if not has_active_or_upcoming:
+                clinic_profile.status = ClinicOwnerProfile.Status.ENDED
+                clinic_profile.save(update_fields=['status'])
 
-        return Response({'status': 'Subscription has been refunded.'}, status=status.HTTP_200_OK)
+            logger.info(
+                f"Subscription {subscription.id} refunded by {request.user.username} "
+                f"for clinic {clinic_profile.clinic_name}"
+            )
+            
+            return Response(
+                {'message': 'Subscription has been refunded successfully.'},
+                status=status.HTTP_200_OK
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to refund subscription {subscription.id}: {str(e)}")
+            return Response(
+                {'error': 'Failed to refund subscription. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
