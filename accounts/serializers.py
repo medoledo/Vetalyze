@@ -192,7 +192,7 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         """
         ret = super().to_representation(instance)
         view = self.context.get('view')
-        if view and view.action == 'list':
+        if view and getattr(view, 'action', None) == 'list':
             ret.pop('subscription_history', None)
         return ret
 
