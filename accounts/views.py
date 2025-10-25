@@ -91,6 +91,13 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
         'subscription_history__payment_method'
     )
     serializer_class = ClinicOwnerProfileSerializer
+    search_fields = [
+        'clinic_name', 
+        'clinic_owner_name', 
+        'user__username', 
+        'owner_phone_number', 
+        'clinic_phone_number'
+    ]
 
     def get_serializer_context(self):
         """Ensure the view is passed to the serializer context."""
@@ -474,6 +481,7 @@ class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
 class DoctorProfileListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsClinicOwner]
     serializer_class = DoctorProfileSerializer
+    search_fields = ['full_name', 'user__username', 'phone_number']
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -516,6 +524,7 @@ class DoctorProfileMeView(generics.RetrieveAPIView):
 class ReceptionProfileListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsClinicOwner]
     serializer_class = ReceptionProfileSerializer
+    search_fields = ['full_name', 'user__username', 'phone_number']
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
