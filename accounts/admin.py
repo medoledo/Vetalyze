@@ -22,6 +22,7 @@ class ClinicOwnerProfileInline(admin.StackedInline):
     Allows editing of the ClinicOwnerProfile directly within the User admin page.
     """
     model = ClinicOwnerProfile
+    fk_name = 'user' # Explicitly specify the foreign key linking to User
     can_delete = False
 
 
@@ -169,7 +170,7 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
     list_filter = ('status', 'country')
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
-    readonly_fields = ('user', 'joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left')
+    readonly_fields = ('joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left', 'status')
 
     def get_queryset(self, request):
         """Optimize the queryset to prevent N+1 queries."""
@@ -181,6 +182,21 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
                 to_attr='_active_subscription_cached'
             )
         )
+
+    def get_form(self, request, obj=None, **kwargs):
+        """
+        Customize the form to filter the 'user' field.
+        - On 'add' page, show only clinic owners who are not yet linked to a profile.
+        - On 'change' page, the field is readonly, so no filtering is needed.
+        """
+        form = super().get_form(request, obj, **kwargs)
+        if 'user' in form.base_fields:
+            # Filter out users who already have a clinic owner profile
+            form.base_fields['user'].queryset = User.objects.filter(
+                role=User.Role.CLINIC_OWNER,
+                clinic_owner_profile__isnull=True
+            )
+        return form
 
     def days_left(self, obj):
         """Display days left from the prefetched active subscription."""

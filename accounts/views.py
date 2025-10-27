@@ -20,6 +20,7 @@ from .serializers import (
 )
 from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
 from .permissions import IsSiteOwner, IsClinicOwner, IsDoctor, IsReception
+from .filters import ClinicOwnerProfileFilter
 from .exceptions import InvalidSubscriptionStatusError, PaginationBypassError
 import logging
 
@@ -91,6 +92,7 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
         'subscription_history__payment_method'
     )
     serializer_class = ClinicOwnerProfileSerializer
+    filterset_class = ClinicOwnerProfileFilter
     search_fields = [
         'clinic_name', 
         'clinic_owner_name', 
