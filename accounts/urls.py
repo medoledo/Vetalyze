@@ -21,6 +21,8 @@ from .views import (
     ReceptionProfileMeView,
     SubscriptionTypeListCreateView,
     SubscriptionTypeDetailView,
+    CountryListCreateView,
+    CountryDetailView,
     PaymentMethodListCreateView,
     PaymentMethodDetailView,
 )
@@ -57,5 +59,9 @@ urlpatterns = [
     path('subscription-types/', SubscriptionTypeListCreateView.as_view(), name='subscription-type-list-create'),
     path('subscription-types/<int:pk>/', SubscriptionTypeDetailView.as_view(), name='subscription-type-detail'),
     path('payment-methods/', PaymentMethodListCreateView.as_view(), name='payment-method-list-create'),
-    path('payment-methods/<int:pk>/', PaymentMethodDetailView.as_view(), name='payment-method-detail'),
+    path('payment-methods/<int:pk>/', PaymentMethodDetailView.as_view(), name='payment-method-detail'),    
+    
+    # Country Management (Site Owner only)
+    path('countries/', CountryListCreateView.as_view(), name='country-list-create'),
+    path('countries/<int:pk>/', CountryDetailView.as_view(), name='country-detail'),
 ]

@@ -93,7 +93,13 @@ class ClinicOwnerProfile(models.Model):
 
     @property
     def active_subscription(self):
-        """Returns the currently active subscription history record, or None."""
+        """
+        Returns the currently active subscription history record from the prefetched
+        cache if available, or queries the database.
+        """
+        if hasattr(self, '_active_subscription_cached'):
+            # The list will be empty or have one item due to the Prefetch query.
+            return self._active_subscription_cached[0] if self._active_subscription_cached else None
         return self.subscription_history.filter(status=SubscriptionHistory.Status.ACTIVE).first()
 
     @property

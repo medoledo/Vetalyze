@@ -16,12 +16,13 @@ from .serializers import (
     CreateSubscriptionHistorySerializer, DoctorProfileSerializer, 
     ReceptionProfileSerializer, SubscriptionTypeSerializer, 
     PaymentMethodSerializer, ChangePasswordSerializer, 
-    SubscriptionHistorySerializer, CustomTokenRefreshSerializer
+    SubscriptionHistorySerializer, CustomTokenRefreshSerializer,
+    CountrySerializer
 )
-from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
-from .permissions import IsSiteOwner, IsClinicOwner, IsDoctor, IsReception
-from .filters import ClinicOwnerProfileFilter
-from .exceptions import InvalidSubscriptionStatusError, PaginationBypassError
+from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory, Country
+from .permissions import IsSiteOwner, IsClinicOwner, IsDoctor, IsReception # Import custom exceptions
+from .filters import ClinicOwnerProfileFilter # Import custom exceptions
+from .exceptions import InvalidSubscriptionStatusError, PaginationBypassError, CountryInUseError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -586,3 +587,26 @@ class PaymentMethodDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = PaymentMethod.objects.all()
     serializer_class = PaymentMethodSerializer
     permission_classes = [IsSiteOwner]
+
+
+class CountryListCreateView(generics.ListCreateAPIView):
+    """
+    - Site Owners can list all countries.
+    - Site Owners can create a new country.
+    """
+    queryset = Country.objects.all()
+    serializer_class = CountrySerializer
+    permission_classes = [IsSiteOwner] # Only Site Owners can manage countries
+
+class CountryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    - Site Owners can retrieve, update, or delete a specific country.
+    """
+    queryset = Country.objects.all()
+    serializer_class = CountrySerializer
+    permission_classes = [IsSiteOwner] # Only Site Owners can manage countries
+
+    def perform_destroy(self, instance):
+        if instance.clinics.exists():
+            raise CountryInUseError()
+        instance.delete()

@@ -58,3 +58,10 @@ class PaginationBypassError(APIException):
     status_code = status.HTTP_403_FORBIDDEN
     default_detail = 'Pagination bypass not allowed. You must be a site owner to retrieve all data without pagination.'
     default_code = 'pagination_bypass_not_allowed'
+
+
+class CountryInUseError(APIException):
+    """Raised when trying to delete a country that has associated clinics."""
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = 'Cannot delete country because clinics are assigned to it.'
+    default_code = 'country_in_use'

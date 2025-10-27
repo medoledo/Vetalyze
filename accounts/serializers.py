@@ -158,6 +158,7 @@ class SubscriptionHistorySerializer(serializers.ModelSerializer):
 
 
 class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
+    clinic_id = serializers.IntegerField(source='pk', read_only=True)
     user = UserSerializer()
     country = CountrySerializer(read_only=True)
     current_plan = SubscriptionTypeSerializer(read_only=True)
@@ -172,12 +173,12 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClinicOwnerProfile
         fields = [
-            'user', 'country', 'country_id', 'clinic_owner_name',
+            'clinic_id', 'user', 'country', 'country_id', 'clinic_owner_name',
             'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location',
             'facebook', 'website', 'instagram', 'tiktok', 'gmail', 'days_left',
             'added_by', 'joined_date', 'status', 'current_plan', 'subscription_history'
         ]
-        read_only_fields = ['joined_date', 'added_by', 'current_plan', 'subscription_history', 'days_left']
+        read_only_fields = ['clinic_id', 'joined_date', 'added_by', 'current_plan', 'subscription_history', 'days_left']
 
     def get_days_left(self, obj):
         """Calculate days left from the active subscription."""

@@ -77,31 +77,6 @@ class CustomUserAdmin(UserAdmin):
         return []
 
 
-@admin.action(description='Mark selected clinics as Ended')
-def make_ended(modeladmin, request, queryset):
-    queryset.update(status=ClinicOwnerProfile.Status.ENDED)
-
-@admin.action(description='Refund active/suspended subscription for selected clinics')
-def refund_active_subscription(modeladmin, request, queryset):
-    for profile in queryset:
-        # Find an active, suspended, or upcoming subscription to refund
-        sub_to_refund = profile.subscription_history.filter(
-            Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.SUSPENDED) | Q(status=SubscriptionHistory.Status.UPCOMING)
-        ).first()
-
-        if sub_to_refund:
-            sub_to_refund.status = SubscriptionHistory.Status.REFUNDED
-            sub_to_refund.comments = f"Refunded via admin action by {request.user.username}."
-            sub_to_refund.save()
-
-            # Check if the clinic has any other active or upcoming subscriptions.
-            if not profile.subscription_history.filter(
-                Q(status=SubscriptionHistory.Status.ACTIVE) | Q(status=SubscriptionHistory.Status.UPCOMING)
-            ).exists():
-                profile.status = ClinicOwnerProfile.Status.ENDED
-                profile.save()
-
-
 def _create_new_subscription_record(original_sub, new_status, comment, user):
     """Helper to create a new subscription record based on an old one."""
     return SubscriptionHistory.objects.create(
@@ -217,8 +192,12 @@ class SubscriptionHistoryAdmin(admin.ModelAdmin):
     actions = [suspend_subscriptions, reactivate_subscriptions, refund_subscriptions]
 
 admin.site.register(SubscriptionType)
-admin.site.register(Country)
 
 @admin.register(PaymentMethod)
 class PaymentMethodAdmin(admin.ModelAdmin):
     list_display = ('name',)
+
+@admin.register(Country)
+class CountryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'max_id_number', 'max_phone_number')
+    search_fields = ('name',)
