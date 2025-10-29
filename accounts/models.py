@@ -84,13 +84,26 @@ class ClinicOwnerProfile(models.Model):
         limit_choices_to={'role': 'SITE_OWNER'}
     )
     joined_date = models.DateField(auto_now_add=True)
-    status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.INACTIVE,
-        db_index=True
-    )
 
+    @property
+    def status(self):
+        """
+        Dynamically determines the clinic's status based on the latest
+        subscription history record.
+        """
+        latest_subscription = self.subscription_history.order_by('-activation_date', '-pk').first()
+
+        if not latest_subscription:
+            return self.Status.INACTIVE
+
+        # Map SubscriptionHistory status to ClinicOwnerProfile status
+        status_map = {
+            SubscriptionHistory.Status.ACTIVE: self.Status.ACTIVE,
+            SubscriptionHistory.Status.SUSPENDED: self.Status.SUSPENDED,
+        }
+        # For ENDED, REFUNDED, UPCOMING, the clinic status is considered ENDED or INACTIVE until active.
+        return status_map.get(latest_subscription.status, self.Status.ENDED)
+        
     @property
     def active_subscription(self):
         """

@@ -25,6 +25,8 @@ from .views import (
     CountryDetailView,
     PaymentMethodListCreateView,
     PaymentMethodDetailView,
+    GlobalSubscriptionHistoryListView,
+    ActiveUpcomingSubscriptionListView,
 )
 
 urlpatterns = [
@@ -44,6 +46,10 @@ urlpatterns = [
     path('clinics/<int:clinic_pk>/subscriptions/', SubscriptionHistoryListCreateView.as_view(), name='subscription-history-list-create'),
     path('clinics/<int:clinic_pk>/subscriptions/<int:sub_pk>/manage/', ManageSubscriptionStatusView.as_view(), name='subscription-manage'),
     path('clinics/<int:clinic_pk>/subscriptions/<int:sub_pk>/refund/', RefundSubscriptionView.as_view(), name='subscription-refund'),
+
+    # Global Subscription Management (Site Owner)
+    path('subscriptions/history/', GlobalSubscriptionHistoryListView.as_view(), name='global-subscription-history'),
+    path('subscriptions/active-upcoming/', ActiveUpcomingSubscriptionListView.as_view(), name='global-active-upcoming-subscriptions'),
     
     # Doctor Profiles
     path('doctors/', DoctorProfileListCreateView.as_view(), name='doctor-list-create'),

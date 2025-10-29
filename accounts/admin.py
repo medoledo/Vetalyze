@@ -1,5 +1,5 @@
 #accounts/admin.py
-
+from django.db.models import Subquery, OuterRef
 from datetime import date, timedelta
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
@@ -139,24 +139,60 @@ def refund_subscriptions(modeladmin, request, queryset):
             sub.clinic.status = ClinicOwnerProfile.Status.ENDED
             sub.clinic.save()
 
+
+class StatusListFilter(admin.SimpleListFilter):
+    """
+    Custom admin filter for the dynamic 'status' property on ClinicOwnerProfile.
+    """
+    title = 'status'
+    parameter_name = 'status'
+
+    def lookups(self, request, model_admin):
+        return ClinicOwnerProfile.Status.choices
+
+    def queryset(self, request, queryset):
+        value = self.value()
+        if value:
+            # This annotation logic must match the one in get_queryset
+            if value == ClinicOwnerProfile.Status.INACTIVE:
+                return queryset.filter(latest_status__isnull=True)
+            if value == ClinicOwnerProfile.Status.ENDED:
+                return queryset.filter(latest_status__in=[
+                    SubscriptionHistory.Status.ENDED,
+                    SubscriptionHistory.Status.REFUNDED,
+                    SubscriptionHistory.Status.UPCOMING
+                ])
+            return queryset.filter(latest_status=value)
+        return queryset
+
+
 @admin.register(ClinicOwnerProfile)
 class ClinicOwnerProfileAdmin(admin.ModelAdmin):
-    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan', 'days_left')
-    list_filter = ('status', 'country')
+    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'display_status', 'current_plan', 'days_left')
+    list_filter = (StatusListFilter, 'country')
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
     readonly_fields = ('joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left', 'status')
 
     def get_queryset(self, request):
         """Optimize the queryset to prevent N+1 queries."""
-        qs = super().get_queryset(request)
-        return qs.select_related('user', 'country').prefetch_related(
+        qs = super().get_queryset(request).select_related('user', 'country')
+
+        # Annotate with the latest subscription status to be used by list_display and list_filter
+        latest_sub_status = SubscriptionHistory.objects.filter(
+            clinic=OuterRef('pk')
+        ).order_by('-activation_date', '-pk').values('status')[:1]
+        qs = qs.annotate(latest_status=Subquery(latest_sub_status))
+
+        # Prefetch the active subscription for calculating days_left and current_plan
+        qs = qs.prefetch_related(
             Prefetch(
                 'subscription_history',
                 queryset=SubscriptionHistory.objects.filter(status=SubscriptionHistory.Status.ACTIVE).select_related('subscription_type'),
                 to_attr='_active_subscription_cached'
             )
         )
+        return qs
 
     def get_form(self, request, obj=None, **kwargs):
         """
@@ -177,6 +213,21 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
         """Display days left from the prefetched active subscription."""
         return obj.active_subscription.days_left if obj.active_subscription else None
     days_left.short_description = 'Days Left'
+
+    def display_status(self, obj):
+        """
+        Displays the clinic's status based on the annotated latest_status.
+        """
+        if not obj.latest_status:
+            return ClinicOwnerProfile.Status.INACTIVE
+        
+        status_map = {
+            SubscriptionHistory.Status.ACTIVE: ClinicOwnerProfile.Status.ACTIVE,
+            SubscriptionHistory.Status.SUSPENDED: ClinicOwnerProfile.Status.SUSPENDED,
+        }
+        return status_map.get(obj.latest_status, ClinicOwnerProfile.Status.ENDED)
+    display_status.short_description = 'Status'
+    display_status.admin_order_field = 'latest_status' # Allow sorting by status
 
 
 admin.site.register(User, CustomUserAdmin)

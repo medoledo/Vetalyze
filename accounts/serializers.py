@@ -357,11 +357,6 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
                 **validated_data
             )
 
-            # Update clinic status if subscription is active
-            if subscription.status == SubscriptionHistory.Status.ACTIVE:
-                clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
-                clinic_profile.save(update_fields=['status'])
-            
             logger.info(
                 f"Created subscription for clinic {clinic_profile.clinic_name}: "
                 f"{subscription.subscription_type.name} (Status: {subscription.status})"

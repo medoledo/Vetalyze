@@ -1,10 +1,12 @@
 #accounts/views.py
 
+from itertools import groupby
+from datetime import date
 from django.shortcuts import render
 from django.shortcuts import get_object_or_404, Http404
 from django.conf import settings
-from django.db import transaction, ProtectedError
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import Q, ProtectedError
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework import generics, views, status, pagination
@@ -277,12 +279,6 @@ class ManageSubscriptionStatusView(views.APIView):
             )
 
         try:
-            # End the current active subscription
-            original_end_date = subscription.end_date
-            subscription.end_date = date.today() - timedelta(days=1)
-            subscription.status = SubscriptionHistory.Status.ENDED
-            subscription.comments = f"{subscription.comments}\nEnded due to suspension on {date.today()}.".strip()
-            subscription.save(update_fields=['end_date', 'status', 'comments'])
 
             # Create a new record for the suspension
             SubscriptionHistory.objects.create(
@@ -292,16 +288,12 @@ class ManageSubscriptionStatusView(views.APIView):
                 payment_method=subscription.payment_method,
                 amount_paid=subscription.amount_paid,
                 start_date=date.today(),
-                end_date=original_end_date,
+                end_date=subscription.end_date,
                 status=SubscriptionHistory.Status.SUSPENDED,
                 comments=f"Suspended: {comment}",
                 activated_by=user
             )
 
-            # Update clinic status
-            clinic_profile.status = ClinicOwnerProfile.Status.SUSPENDED
-            clinic_profile.save(update_fields=['status'])
-            
             logger.info(
                 f"Subscription {subscription.id} suspended by {user.username} "
                 f"for clinic {clinic_profile.clinic_name}"
@@ -328,13 +320,6 @@ class ManageSubscriptionStatusView(views.APIView):
             raise InvalidSubscriptionStatusError('Only SUSPENDED subscriptions can be reactivated.')
         
         try:
-            # End the current suspended subscription
-            original_end_date = subscription.end_date
-            subscription.end_date = date.today() - timedelta(days=1)
-            subscription.status = SubscriptionHistory.Status.ENDED
-            subscription.comments = f"{subscription.comments}\nEnded due to reactivation on {date.today()}.".strip()
-            subscription.save(update_fields=['end_date', 'status', 'comments'])
-
             # Create a new record for the activation
             SubscriptionHistory.objects.create(
                 subscription_group=subscription.subscription_group,
@@ -343,15 +328,11 @@ class ManageSubscriptionStatusView(views.APIView):
                 payment_method=subscription.payment_method,
                 amount_paid=subscription.amount_paid,
                 start_date=date.today(),
-                end_date=original_end_date,
+                end_date=subscription.end_date,
                 status=SubscriptionHistory.Status.ACTIVE,
                 comments=f"Reactivated: {comment}",
                 activated_by=user
             )
-            
-            # Update clinic status
-            clinic_profile.status = ClinicOwnerProfile.Status.ACTIVE
-            clinic_profile.save(update_fields=['status'])
             
             logger.info(
                 f"Subscription {subscription.id} reactivated by {user.username} "
@@ -417,10 +398,19 @@ class RefundSubscriptionView(views.APIView):
             )
 
         try:
-            # Update the subscription
-            subscription.status = SubscriptionHistory.Status.REFUNDED
-            subscription.comments = f"{subscription.comments}\nRefunded: {comment}".strip()
-            subscription.save(update_fields=['status', 'comments'])
+            # Create a new, final record with REFUNDED status
+            SubscriptionHistory.objects.create(
+                subscription_group=subscription.subscription_group,
+                clinic=subscription.clinic,
+                subscription_type=subscription.subscription_type,
+                payment_method=subscription.payment_method,
+                amount_paid=subscription.amount_paid,
+                start_date=subscription.start_date,
+                end_date=subscription.end_date,
+                status=SubscriptionHistory.Status.REFUNDED,
+                comments=f"Refunded: {comment}",
+                activated_by=request.user
+            )
 
             # Check if the clinic has any other active or upcoming subscriptions
             clinic_profile = subscription.clinic
@@ -429,10 +419,6 @@ class RefundSubscriptionView(views.APIView):
                 Q(status=SubscriptionHistory.Status.UPCOMING)
             ).exists()
             
-            if not has_active_or_upcoming:
-                clinic_profile.status = ClinicOwnerProfile.Status.ENDED
-                clinic_profile.save(update_fields=['status'])
-
             logger.info(
                 f"Subscription {subscription.id} refunded by {request.user.username} "
                 f"for clinic {clinic_profile.clinic_name}"
@@ -479,6 +465,76 @@ class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
         # The serializer's `create` method now handles all the logic,
         # including setting the clinic status and deactivating old subscriptions.
         serializer.save()
+
+    def list(self, request, *args, **kwargs):
+        """
+        Custom list method to group subscription history by subscription_group.
+        """
+        queryset = self.get_queryset().order_by('subscription_group', '-activation_date')
+        
+        # Group records by the subscription_group UUID
+        grouped_subscriptions = []
+        for key, group in groupby(queryset, key=lambda x: x.subscription_group):
+            
+            # Serialize the records within the group
+            serializer = self.get_serializer(list(group), many=True)
+            
+            grouped_subscriptions.append({
+                'subscription_group': key,
+                'history': serializer.data
+            })
+
+        # Since we are grouping, we should order the groups themselves.
+        # Let's sort by the most recent activation date within each group.
+        grouped_subscriptions.sort(
+            key=lambda g: g['history'][0]['activation_date'], reverse=True
+        )
+
+        return Response(grouped_subscriptions)
+
+
+class GlobalSubscriptionHistoryListView(generics.ListAPIView):
+    """
+    An endpoint for Site Owners to view all subscription history records,
+    filterable by month and year of activation. Defaults to the current month.
+    e.g., /api/accounts/subscriptions/history/?year=2025&month=10
+    """
+    permission_classes = [IsSiteOwner]
+    serializer_class = SubscriptionHistorySerializer
+
+    def get_queryset(self):
+        """
+        Filters the queryset based on 'year' and 'month' query parameters.
+        Defaults to the current year and month if not provided.
+        """
+        try:
+            year = int(self.request.query_params.get('year', date.today().year))
+            month = int(self.request.query_params.get('month', date.today().month))
+        except (ValueError, TypeError):
+            today = date.today()
+            year = today.year
+            month = today.month
+
+        return SubscriptionHistory.objects.filter(
+            activation_date__year=year,
+            activation_date__month=month
+        ).select_related(
+            'clinic', 'subscription_type', 'payment_method', 'activated_by'
+        ).order_by('-activation_date')
+
+
+class ActiveUpcomingSubscriptionListView(generics.ListAPIView):
+    """
+    An endpoint for Site Owners to get a list of all currently active and
+    upcoming subscriptions across all clinics.
+    """
+    permission_classes = [IsSiteOwner]
+    serializer_class = SubscriptionHistorySerializer
+    queryset = SubscriptionHistory.objects.filter(
+        status__in=[SubscriptionHistory.Status.ACTIVE, SubscriptionHistory.Status.UPCOMING]
+    ).select_related(
+        'clinic', 'subscription_type', 'payment_method', 'activated_by'
+    ).order_by('end_date')
 
 
 class DoctorProfileListCreateView(generics.ListCreateAPIView):
