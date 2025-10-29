@@ -104,6 +104,7 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
         'clinic_phone_number'
     ]
 
+
     def get_serializer_context(self):
         """Ensure the view is passed to the serializer context."""
         context = super().get_serializer_context()
@@ -272,6 +273,9 @@ class ManageSubscriptionStatusView(views.APIView):
         if subscription.status != SubscriptionHistory.Status.ACTIVE:
             raise InvalidSubscriptionStatusError('Only ACTIVE subscriptions can be suspended.')
         
+        # Calculate remaining days to "freeze" them
+        days_remaining = subscription.days_left
+
         if clinic_profile.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
             return Response(
                 {'error': 'Cannot suspend a subscription for a clinic that has an upcoming plan.'},
@@ -290,7 +294,7 @@ class ManageSubscriptionStatusView(views.APIView):
                 start_date=date.today(),
                 end_date=subscription.end_date,
                 status=SubscriptionHistory.Status.SUSPENDED,
-                comments=f"Suspended: {comment}",
+                comments=f"Suspended: {comment}\n[Days Remaining: {days_remaining}]",
                 activated_by=user
             )
 
@@ -319,16 +323,31 @@ class ManageSubscriptionStatusView(views.APIView):
         if subscription.status != SubscriptionHistory.Status.SUSPENDED:
             raise InvalidSubscriptionStatusError('Only SUSPENDED subscriptions can be reactivated.')
         
+        # Extract the frozen days remaining from the comment
+        days_remaining = 0
+        try:
+            # Find the part of the comment like "[Days Remaining: 25]"
+            comment_lines = subscription.comments.split('\n')
+            for line in comment_lines:
+                if line.startswith('[Days Remaining:'):
+                    days_remaining = int(line.split(':')[1].strip().strip(']'))
+                    break
+        except (ValueError, IndexError):
+            # Fallback if parsing fails: use original end_date logic
+            new_end_date = subscription.end_date
+        else:
+            new_end_date = date.today() + timedelta(days=days_remaining)
+
         try:
             # Create a new record for the activation
             SubscriptionHistory.objects.create(
                 subscription_group=subscription.subscription_group,
                 clinic=clinic_profile,
                 subscription_type=subscription.subscription_type,
-                payment_method=subscription.payment_method,
-                amount_paid=subscription.amount_paid,
+                payment_method=subscription.payment_method, # These fields are copied for audit trail
+                amount_paid=subscription.amount_paid, # The original payment is what matters
                 start_date=date.today(),
-                end_date=subscription.end_date,
+                end_date=new_end_date,
                 status=SubscriptionHistory.Status.ACTIVE,
                 comments=f"Reactivated: {comment}",
                 activated_by=user
@@ -443,6 +462,12 @@ class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
     - Site Owners can create a new subscription, which also activates the clinic.
     """
     permission_classes = [IsSiteOwner]
+
+    class GroupedHistoryItemSerializer(SubscriptionHistorySerializer):
+        """A serializer for items within the history group that excludes the redundant group UUID."""
+        class Meta(SubscriptionHistorySerializer.Meta):
+            # Exclude the subscription_group from the inner history items
+            fields = [field for field in SubscriptionHistorySerializer.Meta.fields if field != 'subscription_group']
     
     def get_serializer_class(self):
         if self.request.method == 'POST':
@@ -477,7 +502,7 @@ class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
         for key, group in groupby(queryset, key=lambda x: x.subscription_group):
             
             # Serialize the records within the group
-            serializer = self.get_serializer(list(group), many=True)
+            serializer = self.GroupedHistoryItemSerializer(list(group), many=True)
             
             grouped_subscriptions.append({
                 'subscription_group': key,
@@ -490,7 +515,13 @@ class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
             key=lambda g: g['history'][0]['activation_date'], reverse=True
         )
 
-        return Response(grouped_subscriptions)
+        # Manually apply pagination to the grouped list
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(grouped_subscriptions, request, view=self)
+        if page is not None:
+            return paginator.get_paginated_response(page)
+
+        return Response(grouped_subscriptions) # Fallback for no pagination
 
 
 class GlobalSubscriptionHistoryListView(generics.ListAPIView):
@@ -501,6 +532,13 @@ class GlobalSubscriptionHistoryListView(generics.ListAPIView):
     """
     permission_classes = [IsSiteOwner]
     serializer_class = SubscriptionHistorySerializer
+
+    class GroupedHistoryItemSerializer(SubscriptionHistorySerializer):
+        """A serializer for items within the history group that excludes the redundant group UUID."""
+        class Meta(SubscriptionHistorySerializer.Meta):
+            # Exclude the subscription_group from the inner history items
+            fields = [field for field in SubscriptionHistorySerializer.Meta.fields if field != 'subscription_group']
+
 
     def get_queryset(self):
         """
@@ -521,6 +559,37 @@ class GlobalSubscriptionHistoryListView(generics.ListAPIView):
         ).select_related(
             'clinic', 'subscription_type', 'payment_method', 'activated_by'
         ).order_by('-activation_date')
+
+    def list(self, request, *args, **kwargs):
+        """
+        Custom list method to group the global subscription history by subscription_group.
+        """
+        queryset = self.get_queryset().order_by('subscription_group', '-activation_date')
+
+        # Group records by the subscription_group UUID
+        grouped_subscriptions = []
+        for key, group in groupby(queryset, key=lambda x: x.subscription_group):
+            
+            # Serialize the records within the group
+            serializer = self.GroupedHistoryItemSerializer(list(group), many=True)
+            
+            grouped_subscriptions.append({
+                'subscription_group': key,
+                'history': serializer.data
+            })
+
+        # Sort the groups themselves by the most recent activation date within each group.
+        grouped_subscriptions.sort(
+            key=lambda g: g['history'][0]['activation_date'], reverse=True
+        )
+
+        # Manually apply pagination to the grouped list
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(grouped_subscriptions, request, view=self)
+        if page is not None:
+            return paginator.get_paginated_response(page)
+
+        return Response(grouped_subscriptions) # Fallback for no pagination
 
 
 class ActiveUpcomingSubscriptionListView(generics.ListAPIView):

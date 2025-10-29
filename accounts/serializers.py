@@ -160,11 +160,20 @@ class SubscriptionTypeSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class NestedClinicSerializer(serializers.ModelSerializer):
+    """A lightweight serializer for nested clinic information."""
+    clinic_id = serializers.IntegerField(source='pk')
+    class Meta:
+        model = ClinicOwnerProfile
+        fields = ['clinic_id', 'clinic_name', 'clinic_owner_name']
+
+
 class SubscriptionHistorySerializer(serializers.ModelSerializer):
     subscription_type = SubscriptionTypeSerializer(read_only=True)
     payment_method = PaymentMethodSerializer(read_only=True)
     activated_by = UserSerializer(read_only=True)
     days_left = serializers.IntegerField(read_only=True)
+    clinic = NestedClinicSerializer(read_only=True)
 
     class Meta:
         model = SubscriptionHistory
