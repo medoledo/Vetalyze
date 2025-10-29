@@ -244,6 +244,7 @@ class SubscriptionType(models.Model):
     price = models.DecimalField(max_digits=8, decimal_places=2)
     duration_days = models.IntegerField(help_text="Duration of the subscription in days.")
     allowed_accounts = models.PositiveIntegerField(default=5, help_text="Total number of Doctor/Reception accounts allowed.")
+    is_active = models.BooleanField(default=True, help_text="Designates whether this plan can be assigned to new subscriptions.")
 
     def __str__(self):
         return f"{self.name} - {self.price} for {self.duration_days} days"
@@ -254,6 +255,7 @@ class PaymentMethod(models.Model):
     Stores payment methods for clinic owners.
     """
     name = models.CharField(max_length=100, help_text="Name of the payment method (e.g., Visa, Cash)")
+    is_active = models.BooleanField(default=True, help_text="Designates whether this payment method is available for new transactions.")
 
     def __str__(self):
         return self.name

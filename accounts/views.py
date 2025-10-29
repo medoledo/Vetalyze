@@ -3,7 +3,7 @@
 from django.shortcuts import render
 from django.shortcuts import get_object_or_404, Http404
 from django.conf import settings
-from django.db import transaction
+from django.db import transaction, ProtectedError
 from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -22,7 +22,7 @@ from .serializers import (
 from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory, Country
 from .permissions import IsSiteOwner, IsClinicOwner, IsDoctor, IsReception # Import custom exceptions
 from .filters import ClinicOwnerProfileFilter # Import custom exceptions
-from .exceptions import InvalidSubscriptionStatusError, PaginationBypassError, CountryInUseError
+from .exceptions import InvalidSubscriptionStatusError, PaginationBypassError, CountryInUseError, ProtectedObjectInUseError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -568,25 +568,37 @@ class ReceptionProfileMeView(generics.RetrieveAPIView):
 
 
 class SubscriptionTypeListCreateView(generics.ListCreateAPIView):
-    queryset = SubscriptionType.objects.all()
+    queryset = SubscriptionType.objects.filter(is_active=True)
     serializer_class = SubscriptionTypeSerializer
     permission_classes = [IsSiteOwner] # Only Site Owners can manage subscription types
 
 class SubscriptionTypeDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = SubscriptionType.objects.all()
+    queryset = SubscriptionType.objects.all() # Show all for detail view, even inactive ones
     serializer_class = SubscriptionTypeSerializer
     permission_classes = [IsSiteOwner]
 
+    def perform_destroy(self, instance):
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise ProtectedObjectInUseError("This subscription type cannot be deleted because it is used in subscription histories.")
+
 
 class PaymentMethodListCreateView(generics.ListCreateAPIView):
-    queryset = PaymentMethod.objects.all()
+    queryset = PaymentMethod.objects.filter(is_active=True)
     serializer_class = PaymentMethodSerializer
     permission_classes = [IsSiteOwner] # Only Site Owners can manage payment methods
 
 class PaymentMethodDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = PaymentMethod.objects.all()
+    queryset = PaymentMethod.objects.all() # Show all for detail view
     serializer_class = PaymentMethodSerializer
     permission_classes = [IsSiteOwner]
+
+    def perform_destroy(self, instance):
+        try:
+            instance.delete()
+        except ProtectedError:
+            raise ProtectedObjectInUseError("This payment method cannot be deleted because it is used in subscription histories.")
 
 
 class CountryListCreateView(generics.ListCreateAPIView):

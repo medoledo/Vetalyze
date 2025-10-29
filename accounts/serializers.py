@@ -38,24 +38,31 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         # Check the clinic's active status for all clinic-related roles
         clinic_profile = None
+        name = None
+
         if hasattr(user, 'clinic_owner_profile'):
             clinic_profile = user.clinic_owner_profile
+            name = clinic_profile.clinic_owner_name
         elif hasattr(user, 'doctor_profile') or hasattr(user, 'reception_profile'):
             profile = getattr(user, 'doctor_profile', None) or getattr(user, 'reception_profile', None)
             if profile:
                 clinic_profile = profile.clinic_owner_profile
+                name = profile.full_name
 
         # Verify clinic status
         if clinic_profile:
             if not clinic_profile.is_active:
                 logger.warning(
-                    f"Login attempt for user {user.username} with inactive clinic: {clinic_profile.clinic_name}"
+                    f"Login attempt for user {user.username} with inactive clinic: {clinic_profile.clinic_name if clinic_profile else 'N/A'}"
                 )
                 raise InactiveClinicError(
                     "The clinic associated with this account is inactive. Please contact support."
                 )
 
+        # Add custom data to the response
         data['role'] = user.role
+        data['username'] = user.username
+        data['name'] = name
         data['clinic_name'] = clinic_profile.clinic_name if clinic_profile else "Vetalyze"
         
         logger.info(f"Successful login for user: {user.username}")
@@ -94,12 +101,16 @@ class CustomTokenRefreshSerializer(TokenRefreshSerializer):
 
         # Check the clinic's active status
         clinic_profile = None
+        name = None
+
         if hasattr(user, 'clinic_owner_profile'):
             clinic_profile = user.clinic_owner_profile
+            name = clinic_profile.clinic_owner_name
         elif hasattr(user, 'doctor_profile') or hasattr(user, 'reception_profile'):
             profile = getattr(user, 'doctor_profile', None) or getattr(user, 'reception_profile', None)
             if profile:
                 clinic_profile = profile.clinic_owner_profile
+                name = profile.full_name
 
         if clinic_profile and not clinic_profile.is_active:
             logger.warning(
@@ -109,7 +120,10 @@ class CustomTokenRefreshSerializer(TokenRefreshSerializer):
                 "The clinic associated with this account is inactive. Please contact support."
             )
 
+        # Add custom data to the response
         data['role'] = user.role
+        data['username'] = user.username
+        data['name'] = name
         data['clinic_name'] = clinic_profile.clinic_name if clinic_profile else "Vetalyze"
         return data
 

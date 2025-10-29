@@ -191,11 +191,33 @@ class SubscriptionHistoryAdmin(admin.ModelAdmin):
     search_fields = ('clinic__clinic_name', 'ref_number', 'subscription_group__iexact')
     actions = [suspend_subscriptions, reactivate_subscriptions, refund_subscriptions]
 
-admin.site.register(SubscriptionType)
+@admin.register(SubscriptionType)
+class SubscriptionTypeAdmin(admin.ModelAdmin):
+    list_display = ('name', 'price', 'duration_days', 'allowed_accounts', 'is_active')
+    list_filter = ('is_active',)
+    actions = ['make_active', 'make_inactive']
+
+    @admin.action(description='Mark selected types as active')
+    def make_active(self, request, queryset):
+        queryset.update(is_active=True)
+
+    @admin.action(description='Mark selected types as inactive')
+    def make_inactive(self, request, queryset):
+        queryset.update(is_active=False)
 
 @admin.register(PaymentMethod)
 class PaymentMethodAdmin(admin.ModelAdmin):
-    list_display = ('name',)
+    list_display = ('name', 'is_active')
+    list_filter = ('is_active',)
+    actions = ['make_active', 'make_inactive']
+
+    @admin.action(description='Mark selected methods as active')
+    def make_active(self, request, queryset):
+        queryset.update(is_active=True)
+
+    @admin.action(description='Mark selected methods as inactive')
+    def make_inactive(self, request, queryset):
+        queryset.update(is_active=False)
 
 @admin.register(Country)
 class CountryAdmin(admin.ModelAdmin):

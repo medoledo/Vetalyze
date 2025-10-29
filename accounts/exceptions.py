@@ -46,6 +46,13 @@ class InvalidSubscriptionStatusError(APIException):
     default_code = 'invalid_status_transition'
 
 
+class ProtectedObjectInUseError(APIException):
+    """Raised when trying to delete an object protected by a ForeignKey."""
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_detail = 'This item cannot be deleted because it is currently in use by other records.'
+    default_code = 'object_in_use'
+
+
 class AccountLimitExceededError(APIException):
     """Raised when trying to create more accounts than allowed by subscription."""
     status_code = status.HTTP_403_FORBIDDEN
