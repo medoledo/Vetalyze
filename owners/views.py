@@ -16,7 +16,13 @@ class OwnerListCreateView(generics.ListCreateAPIView):
         user = self.request.user
         # Clinic owners can see all clients in their clinic.
         if user.role == User.Role.CLINIC_OWNER:
-            return Owner.objects.filter(clinic=user.clinic_owner_profile).prefetch_related('pets')
+            return Owner.objects.filter(
+                clinic=user.clinic_owner_profile
+            ).prefetch_related(
+                'pets__type'
+            ).select_related(
+                'knew_us_from'
+            ).order_by('-id')
         return Owner.objects.none()
 
     def get_serializer_context(self):
@@ -33,7 +39,13 @@ class OwnerDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         user = self.request.user
         if user.role == User.Role.CLINIC_OWNER:
-            return Owner.objects.filter(clinic=user.clinic_owner_profile)
+            return Owner.objects.filter(
+                clinic=user.clinic_owner_profile
+            ).prefetch_related(
+                'pets__type'
+            ).select_related(
+                'knew_us_from'
+            )
         return Owner.objects.none()
 
 

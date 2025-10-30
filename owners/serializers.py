@@ -26,16 +26,21 @@ class OwnerSerializer(serializers.ModelSerializer):
         read_only_fields = ['code']
 
     def create(self, validated_data):
+        from django.db import transaction
+        
         pets_data = validated_data.pop('pets')
         if not pets_data:
             raise serializers.ValidationError("An owner must have at least one pet.")
             
         # Get the clinic from the request context (will be set in the view)
         clinic = self.context['request'].user.clinic_owner_profile
-        owner = Owner.objects.create(clinic=clinic, **validated_data)
-
-        for pet_data in pets_data:
-            Pet.objects.create(owner=owner, **pet_data)
+        
+        with transaction.atomic():
+            owner = Owner.objects.create(clinic=clinic, **validated_data)
+            
+            # Bulk create pets for better performance
+            pets_to_create = [Pet(owner=owner, **pet_data) for pet_data in pets_data]
+            Pet.objects.bulk_create(pets_to_create)
 
         return owner
 

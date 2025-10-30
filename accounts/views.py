@@ -5,7 +5,7 @@ from datetime import date
 from django.shortcuts import render
 from django.shortcuts import get_object_or_404, Http404
 from django.conf import settings
-from django.db import transaction
+from django.db import transaction, models as django_models
 from django.db.models import Q, ProtectedError
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -91,9 +91,14 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
     queryset = ClinicOwnerProfile.objects.select_related(
         'user', 'country'
     ).prefetch_related(
-        'subscription_history__subscription_type',
-        'subscription_history__payment_method'
-    )
+        django_models.Prefetch(
+            'subscription_history',
+            queryset=SubscriptionHistory.objects.select_related(
+                'subscription_type', 'payment_method', 'activated_by'
+            ).filter(status=SubscriptionHistory.Status.ACTIVE),
+            to_attr='_active_subscription_cached'
+        )
+    ).order_by('-joined_date')
     serializer_class = ClinicOwnerProfileSerializer
     filterset_class = ClinicOwnerProfileFilter
     search_fields = [
@@ -124,8 +129,19 @@ class ClinicOwnerProfileDetailView(generics.RetrieveUpdateAPIView):
     queryset = ClinicOwnerProfile.objects.select_related(
         'user', 'country'
     ).prefetch_related(
-        'subscription_history__subscription_type',
-        'subscription_history__payment_method'
+        django_models.Prefetch(
+            'subscription_history',
+            queryset=SubscriptionHistory.objects.select_related(
+                'subscription_type', 'payment_method', 'activated_by'
+            ).order_by('-activation_date')
+        ),
+        django_models.Prefetch(
+            'subscription_history',
+            queryset=SubscriptionHistory.objects.select_related(
+                'subscription_type', 'payment_method', 'activated_by'
+            ).filter(status=SubscriptionHistory.Status.ACTIVE),
+            to_attr='_active_subscription_cached'
+        )
     )
     serializer_class = ClinicOwnerProfileSerializer
 
