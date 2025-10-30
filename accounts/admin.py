@@ -76,58 +76,59 @@ class CustomUserAdmin(UserAdmin):
             return [ReceptionProfileInline]
         return []
 
-
-def _create_new_subscription_record(original_sub, new_status, comment, user):
-    """Helper to create a new subscription record based on an old one."""
-    return SubscriptionHistory.objects.create(
-        subscription_group=original_sub.subscription_group, # Keep the same group
-        clinic=original_sub.clinic,
-        subscription_type=original_sub.subscription_type,
-        payment_method=original_sub.payment_method,
-        amount_paid=original_sub.amount_paid,
-        start_date=date.today(),
-        end_date=original_sub.end_date,
-        status=new_status,
-        comments=comment,
-        activated_by=user
-    )
-
 @admin.action(description='Suspend selected ACTIVE subscriptions')
 def suspend_subscriptions(modeladmin, request, queryset):
     for sub in queryset.filter(status=SubscriptionHistory.Status.ACTIVE):
         # Rule: Cannot suspend if there is an upcoming subscription.
         if sub.clinic.subscription_history.filter(status=SubscriptionHistory.Status.UPCOMING).exists():
             continue
-        
-        # End the current active subscription
-        original_end_date = sub.end_date
-        sub.end_date = date.today() - timedelta(days=1)
-        sub.status = SubscriptionHistory.Status.ENDED
-        sub.comments = f"{sub.comments}\nEnded on {date.today()} due to suspension.".strip()
-        sub.save()
+
+        # Calculate remaining days to "freeze" them
+        days_remaining = sub.days_left
 
         # Create a new suspended record
-        comment = f"Suspended via admin action by {request.user.username}."
-        _create_new_subscription_record(sub, SubscriptionHistory.Status.SUSPENDED, comment, request.user)
-
-        sub.clinic.status = ClinicOwnerProfile.Status.SUSPENDED
-        sub.clinic.save()
+        SubscriptionHistory.objects.create(
+            subscription_group=sub.subscription_group,
+            clinic=sub.clinic,
+            subscription_type=sub.subscription_type,
+            payment_method=sub.payment_method,
+            amount_paid=sub.amount_paid,
+            start_date=date.today(),
+            end_date=sub.end_date, # Original end_date is kept for reference
+            status=SubscriptionHistory.Status.SUSPENDED,
+            comments=f"Suspended via admin by {request.user.username}.\n[Days Remaining: {days_remaining}]",
+            activated_by=request.user
+        )
 
 @admin.action(description='Reactivate selected SUSPENDED subscriptions')
 def reactivate_subscriptions(modeladmin, request, queryset):
     for sub in queryset.filter(status=SubscriptionHistory.Status.SUSPENDED):
-        # End the current suspended subscription
-        sub.end_date = date.today() - timedelta(days=1)
-        sub.status = SubscriptionHistory.Status.ENDED
-        sub.comments = f"{sub.comments}\nEnded on {date.today()} due to reactivation.".strip()
-        sub.save()
+        # Extract the frozen days remaining from the comment
+        days_remaining = 0
+        try:
+            comment_lines = sub.comments.split('\n')
+            for line in comment_lines:
+                if line.startswith('[Days Remaining:'):
+                    days_remaining = int(line.split(':')[1].strip().strip(']'))
+                    break
+        except (ValueError, IndexError):
+            new_end_date = sub.end_date # Fallback if parsing fails
+        else:
+            new_end_date = date.today() + timedelta(days=days_remaining)
 
         # Create a new active record
-        comment = f"Reactivated via admin action by {request.user.username}."
-        _create_new_subscription_record(sub, SubscriptionHistory.Status.ACTIVE, comment, request.user)
-
-        sub.clinic.status = ClinicOwnerProfile.Status.ACTIVE
-        sub.clinic.save()
+        SubscriptionHistory.objects.create(
+            subscription_group=sub.subscription_group,
+            clinic=sub.clinic,
+            subscription_type=sub.subscription_type,
+            payment_method=sub.payment_method,
+            amount_paid=sub.amount_paid,
+            start_date=date.today(),
+            end_date=new_end_date,
+            status=SubscriptionHistory.Status.ACTIVE,
+            comments=f"Reactivated via admin by {request.user.username}.",
+            activated_by=request.user
+        )
 
 @admin.action(description='Refund selected subscriptions')
 def refund_subscriptions(modeladmin, request, queryset):

@@ -62,10 +62,10 @@ class ClinicOwnerProfile(models.Model):
         limit_choices_to={'role': 'CLINIC_OWNER'}
     )
     country = models.ForeignKey(Country, on_delete=models.PROTECT, related_name='clinics')
-    clinic_owner_name = models.CharField(max_length=255)
-    clinic_name = models.CharField(max_length=255)
-    owner_phone_number = models.CharField(max_length=20)
-    clinic_phone_number = models.CharField(max_length=20)
+    clinic_owner_name = models.CharField(max_length=255, db_index=True)
+    clinic_name = models.CharField(max_length=255, db_index=True)
+    owner_phone_number = models.CharField(max_length=20, db_index=True)
+    clinic_phone_number = models.CharField(max_length=20, db_index=True)
     location = models.CharField(max_length=255, blank=True)
     
     # Social and Contact Links
@@ -146,12 +146,18 @@ class DoctorProfile(models.Model):
     clinic_owner_profile = models.ForeignKey(
         ClinicOwnerProfile,
         on_delete=models.CASCADE,
-        related_name='doctors'
+        related_name='doctors',
+        db_index=True
     )
-    full_name = models.CharField(max_length=255)
-    phone_number = models.CharField(max_length=20, blank=True)
+    full_name = models.CharField(max_length=255, db_index=True)
+    phone_number = models.CharField(max_length=20, blank=True, db_index=True)
     joined_date = models.DateField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['clinic_owner_profile', 'is_active']),
+        ]
 
     def __str__(self):
         return self.full_name
@@ -171,12 +177,18 @@ class ReceptionProfile(models.Model):
     clinic_owner_profile = models.ForeignKey(
         ClinicOwnerProfile,
         on_delete=models.CASCADE,
-        related_name='receptionists'
+        related_name='receptionists',
+        db_index=True
     )
-    full_name = models.CharField(max_length=255)
-    phone_number = models.CharField(max_length=20, blank=True)
+    full_name = models.CharField(max_length=255, db_index=True)
+    phone_number = models.CharField(max_length=20, blank=True, db_index=True)
     joined_date = models.DateField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['clinic_owner_profile', 'is_active']),
+        ]
 
     def __str__(self):
         return self.full_name
@@ -244,6 +256,13 @@ class SubscriptionHistory(models.Model):
             else:
                 self.status = self.Status.ACTIVE
         super().save(*args, **kwargs)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['clinic', 'status']),
+            models.Index(fields=['status', 'end_date']),
+            models.Index(fields=['activation_date', 'clinic']),
+        ]
 
     def __str__(self):
         return f"{self.clinic.clinic_name} - {self.subscription_type.name} ({self.status})"
