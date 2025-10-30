@@ -2,6 +2,7 @@
 
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
 from .exceptions import PaginationBypassError
 
 
@@ -39,11 +40,8 @@ class ClinicPagination(PageNumberPagination):
         Override to handle non-paginated responses.
         """
         if self.page is None:
-            # Non-paginated response
-            return super().get_paginated_response(data)
-        else:
-            # Paginated response
-            return super().get_paginated_response(data)
+            return Response(data)
+        return super().get_paginated_response(data)
 
     def get_paginated_response_schema(self, schema):
         """
