@@ -243,6 +243,20 @@ class SubscriptionHistoryAdmin(admin.ModelAdmin):
     search_fields = ('clinic__clinic_name', 'ref_number', 'subscription_group__iexact')
     actions = [suspend_subscriptions, reactivate_subscriptions, refund_subscriptions]
 
+    def get_form(self, request, obj=None, **kwargs):
+        """
+        Customize the form to exclude 'ENDED' from the status choices on the 'add' page.
+        """
+        form = super().get_form(request, obj, **kwargs)
+        # When creating a new subscription (obj is None)
+        if obj is None and 'status' in form.base_fields:
+            # Filter out the 'ENDED' choice from the status field
+            form.base_fields['status'].choices = [
+                choice for choice in SubscriptionHistory.Status.choices 
+                if choice[0] != SubscriptionHistory.Status.ENDED
+            ]
+        return form
+
 @admin.register(SubscriptionType)
 class SubscriptionTypeAdmin(admin.ModelAdmin):
     list_display = ('name', 'price', 'duration_days', 'allowed_accounts', 'is_active')
