@@ -181,11 +181,11 @@ class ClinicOwnerProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
         """
         instance = self.get_object()
 
-        # Check if clinic has any subscription history (only INACTIVE clinics with no history can be deleted)
-        if instance.subscription_history.exists():
+        # Only allow deletion for INACTIVE status (no subscription history)
+        if instance.status != ClinicOwnerProfile.Status.INACTIVE:
             return Response(
                 {
-                    'error': 'Cannot delete clinic with subscription history. Use the deactivate endpoint instead.',
+                    'error': 'Cannot delete clinic with an active, ended, or suspended subscription history.',
                     'detail': 'This clinic has subscription records and must be deactivated rather than deleted.'
                 },
                 status=status.HTTP_400_BAD_REQUEST
@@ -224,8 +224,8 @@ class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
 
 class DeactivateClinicView(views.APIView):
     """
-    Soft delete endpoint - Deactivate a clinic (only for clinics with ENDED status).
-    Cannot deactivate clinics with ACTIVE, SUSPENDED, or INACTIVE status.
+    Soft delete endpoint - Deactivates a clinic (only for clinics with ENDED status).
+    This action is equivalent to a soft delete.
     """
     permission_classes = [IsSiteOwner]
 
@@ -233,7 +233,7 @@ class DeactivateClinicView(views.APIView):
     def post(self, request, pk):
         """
         Deactivate a clinic by setting all user accounts to inactive.
-        Only works for clinics with ENDED subscription status.
+        This only works for clinics with an ENDED subscription status.
         """
         try:
             clinic = get_object_or_404(
@@ -254,8 +254,7 @@ class DeactivateClinicView(views.APIView):
             return Response(
                 {
                     'error': f'Cannot deactivate clinic with status: {clinic_status}',
-                    'detail': 'Only clinics with ENDED status can be deactivated. '
-                             'ACTIVE or SUSPENDED subscriptions must be ended first. '
+                    'detail': 'Only clinics with an ENDED status can be deactivated. '
                              'INACTIVE clinics (no subscriptions) should be deleted instead.'
                 },
                 status=status.HTTP_400_BAD_REQUEST

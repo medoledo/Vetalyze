@@ -81,7 +81,7 @@ class ClinicOwnerProfile(models.Model):
         ACTIVE = "ACTIVE", _("Active")
         ENDED = "ENDED", _("Ended")
         SUSPENDED = "SUSPENDED", _("Suspended")
-        DEACTIVATED = "DEACTIVATED", _("Deactivated")
+        SOFT_DELETED = "SOFT_DELETED", _("Soft Deleted")
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
