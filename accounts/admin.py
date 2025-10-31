@@ -1,10 +1,9 @@
 #accounts/admin.py
-from django.db.models import Subquery, OuterRef
 from datetime import date, timedelta
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Prefetch, Q
-from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
+from django.db.models import Subquery, OuterRef, Prefetch
+from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory, UserSession
 
 
 class SubscriptionHistoryInline(admin.TabularInline):
@@ -289,3 +288,19 @@ class PaymentMethodAdmin(admin.ModelAdmin):
 class CountryAdmin(admin.ModelAdmin):
     list_display = ('name', 'max_id_number', 'max_phone_number')
     search_fields = ('name',)
+
+@admin.register(UserSession)
+class UserSessionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'device_info_short', 'created_at', 'last_used')
+    list_filter = ('created_at', 'last_used')
+    search_fields = ('user__username', 'device_info')
+    readonly_fields = ('user', 'jti', 'refresh_token_jti', 'device_info', 'created_at', 'last_used')
+    
+    def device_info_short(self, obj):
+        """Display shortened device info"""
+        return obj.device_info[:80] + '...' if len(obj.device_info) > 80 else obj.device_info
+    device_info_short.short_description = 'Device Info'
+    
+    def has_add_permission(self, request):
+        """Prevent manual creation of sessions"""
+        return False

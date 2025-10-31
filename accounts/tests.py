@@ -39,7 +39,7 @@ class UserModelTest(TestCase):
     
     def test_user_roles(self):
         """Test different user roles."""
-        for role in [User.Role.ADMIN, User.Role.SITE_OWNER, User.Role.CLINIC_OWNER, 
+        for role in [User.Role.SITE_OWNER, User.Role.CLINIC_OWNER, 
                      User.Role.DOCTOR, User.Role.RECEPTION]:
             user = User.objects.create_user(
                 username=f'user_{role}',

@@ -1,11 +1,12 @@
 #accounts/serializers.py
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 from rest_framework import serializers
 from datetime import date, timedelta
 from django.db import transaction
-from django.db.models import Q
-from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory
+from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory, UserSession
 from .exceptions import InactiveUserError, InactiveClinicError, OverlappingSubscriptionError, SuspendedClinicError
 import logging
 
@@ -25,6 +26,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         """
         Validate login credentials and check user/clinic status.
+        Implements single-device login enforcement (except for SITE_OWNERs).
         Note: Subscription status updates are now handled by a background task
         (management command: update_subscription_statuses) that runs daily at 12:01 AM.
         """
@@ -58,6 +60,67 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 raise InactiveClinicError(
                     "The clinic associated with this account is inactive. Please contact support."
                 )
+
+        # Single-device login enforcement
+        # Only SITE_OWNERs can login from multiple devices simultaneously
+        if user.role != User.Role.SITE_OWNER:
+            # Get all existing sessions for this user
+            existing_sessions = UserSession.objects.filter(user=user)
+            session_count = existing_sessions.count()
+            
+            if session_count > 0:
+                # Blacklist all previous tokens to force logout from other devices
+                for session in existing_sessions:
+                    try:
+                        # Find and blacklist the outstanding token
+                        outstanding_tokens = OutstandingToken.objects.filter(
+                            jti=session.refresh_token_jti,
+                            user=user
+                        )
+                        for token in outstanding_tokens:
+                            # Check if not already blacklisted
+                            if not BlacklistedToken.objects.filter(token=token).exists():
+                                BlacklistedToken.objects.create(token=token)
+                    except Exception as e:
+                        logger.warning(f"Error blacklisting token: {str(e)}")
+                
+                # Delete old sessions
+                existing_sessions.delete()
+                logger.info(f"Logged out user {user.username} from {session_count} other device(s)")
+
+        # Get device information from request
+        request = self.context.get('request')
+        device_info = ''
+        if request:
+            user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
+            ip_address = request.META.get('REMOTE_ADDR', '')
+            device_info = f"{user_agent} | IP: {ip_address}"
+
+        # Extract JTI from tokens for session tracking
+        refresh_token = data.get('refresh')
+        access_token = data.get('access')
+        
+        if refresh_token and access_token:
+            try:
+                # Extract JTIs from the actual tokens in the response
+                from rest_framework_simplejwt.tokens import AccessToken
+                
+                refresh_token_obj = RefreshToken(refresh_token)
+                access_token_obj = AccessToken(access_token)
+                
+                refresh_jti = str(refresh_token_obj.get('jti', ''))
+                access_jti = str(access_token_obj.get('jti', ''))
+                
+                # Create new session record
+                UserSession.objects.create(
+                    user=user,
+                    jti=access_jti,
+                    refresh_token_jti=refresh_jti,
+                    device_info=device_info
+                )
+                logger.info(f"Created new session for user {user.username} (JTI: {access_jti[:10]}...) | Device: {device_info[:100]}")
+            except Exception as e:
+                logger.error(f"Error creating user session: {str(e)}")
 
         # Add custom data to the response
         data['role'] = user.role
@@ -119,6 +182,34 @@ class CustomTokenRefreshSerializer(TokenRefreshSerializer):
             raise InactiveClinicError(
                 "The clinic associated with this account is inactive. Please contact support."
             )
+
+        # Update session with new token JTIs when token is refreshed
+        try:
+            # Get the OLD refresh token from the request to find the session
+            old_refresh_token = self.context['request'].data.get('refresh')
+            if old_refresh_token:
+                old_refresh_obj = RefreshToken(old_refresh_token)
+                old_refresh_jti = str(old_refresh_obj.get('jti', ''))
+                
+                if old_refresh_jti:
+                    # Find session by OLD refresh token JTI
+                    session = UserSession.objects.filter(
+                        user=user, 
+                        refresh_token_jti=old_refresh_jti
+                    ).first()
+                    
+                    if session:
+                        # Update with NEW token JTIs
+                        new_access_jti = str(new_access_token.get('jti', ''))
+                        new_refresh_jti = RefreshToken(data.get('refresh')).get('jti', '') if data.get('refresh') else ''
+                        
+                        if new_access_jti and new_refresh_jti:
+                            session.jti = new_access_jti
+                            session.refresh_token_jti = str(new_refresh_jti)
+                            session.save(update_fields=['jti', 'refresh_token_jti', 'last_used'])
+                            logger.info(f"Updated session for user {user.username} with new token JTIs")
+        except Exception as e:
+            logger.warning(f"Error updating session on token refresh: {str(e)}")
 
         # Add custom data to the response
         data['role'] = user.role

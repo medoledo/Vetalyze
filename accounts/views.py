@@ -1,15 +1,15 @@
 #accounts/views.py
 
 from itertools import groupby
-from datetime import date
-from django.shortcuts import render
-from django.shortcuts import get_object_or_404, Http404
+from datetime import date, timedelta
+from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django.conf import settings
 from django.db import transaction, models as django_models
-from django.db.models import Q, ProtectedError
-from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
-from rest_framework import generics, views, status, pagination
+from django.db.models import ProtectedError
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework import generics, views, status
 from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -21,9 +21,9 @@ from .serializers import (
     SubscriptionHistorySerializer, CustomTokenRefreshSerializer,
     CountrySerializer
 )
-from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory, Country
-from .permissions import IsSiteOwner, IsClinicOwner, IsDoctor, IsReception # Import custom exceptions
-from .filters import ClinicOwnerProfileFilter # Import custom exceptions
+from .models import User, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory, Country, UserSession
+from .permissions import IsSiteOwner, IsClinicOwner, IsDoctor, IsReception
+from .filters import ClinicOwnerProfileFilter
 from .exceptions import InvalidSubscriptionStatusError, PaginationBypassError, CountryInUseError, ProtectedObjectInUseError
 import logging
 
@@ -49,7 +49,7 @@ class CustomTokenRefreshView(TokenRefreshView):
 
 class LogoutView(views.APIView):
     """
-    An endpoint to blacklist a refresh token.
+    An endpoint to blacklist a refresh token and clean up user session.
     On the client-side, the access and refresh tokens should be deleted upon a successful request.
     """
     permission_classes = [IsAuthenticated]
@@ -65,9 +65,25 @@ class LogoutView(views.APIView):
                 )
             
             token = RefreshToken(refresh_token)
+            refresh_jti = str(token.get('jti', ''))
+            
+            # Blacklist the refresh token
             token.blacklist()
             
-            logger.info(f"User {request.user.username} logged out successfully")
+            # Delete the user's session
+            if refresh_jti:
+                deleted_count, _ = UserSession.objects.filter(
+                    user=request.user,
+                    refresh_token_jti=refresh_jti
+                ).delete()
+                
+                if deleted_count > 0:
+                    logger.info(f"User {request.user.username} logged out successfully (session deleted)")
+                else:
+                    logger.warning(f"User {request.user.username} logged out but no session found")
+            else:
+                logger.info(f"User {request.user.username} logged out successfully")
+            
             return Response(
                 {"message": "Successfully logged out."},
                 status=status.HTTP_205_RESET_CONTENT
@@ -239,8 +255,6 @@ class ManageSubscriptionStatusView(views.APIView):
     permission_classes = [IsSiteOwner]
 
     def post(self, request, *args, **kwargs):
-        from datetime import date, timedelta
-        
         try:
             subscription = get_object_or_404(
                 SubscriptionHistory.objects.select_related('clinic'),
@@ -284,8 +298,6 @@ class ManageSubscriptionStatusView(views.APIView):
     @transaction.atomic
     def _handle_suspend(self, subscription, clinic_profile, comment, user):
         """Handle subscription suspension with atomic transaction."""
-        from datetime import date, timedelta
-        
         if subscription.status != SubscriptionHistory.Status.ACTIVE:
             raise InvalidSubscriptionStatusError('Only ACTIVE subscriptions can be suspended.')
         
@@ -334,8 +346,6 @@ class ManageSubscriptionStatusView(views.APIView):
     @transaction.atomic
     def _handle_reactivate(self, subscription, clinic_profile, comment, user):
         """Handle subscription reactivation with atomic transaction."""
-        from datetime import date, timedelta
-        
         if subscription.status != SubscriptionHistory.Status.SUSPENDED:
             raise InvalidSubscriptionStatusError('Only SUSPENDED subscriptions can be reactivated.')
         

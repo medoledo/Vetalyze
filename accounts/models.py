@@ -9,6 +9,35 @@ from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 
 
+class UserSession(models.Model):
+    """
+    Tracks active JWT sessions for each user.
+    Used to enforce single-device login (except for SITE_OWNERs).
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='active_sessions'
+    )
+    jti = models.CharField(max_length=255, unique=True, db_index=True)  # JWT ID
+    refresh_token_jti = models.CharField(max_length=255, unique=True, db_index=True)  # Refresh token JTI
+    device_info = models.CharField(max_length=500, blank=True)  # User agent, IP, etc.
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['last_used']),  # For cleanup queries
+        ]
+        ordering = ['-created_at']
+        verbose_name = "User Session"
+        verbose_name_plural = "User Sessions"
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.device_info[:50]}"
+
+
 class User(AbstractUser):
     """
     Custom User model inheriting from AbstractUser.
@@ -17,7 +46,6 @@ class User(AbstractUser):
     """
     
     class Role(models.TextChoices):
-        ADMIN = "ADMIN", "Admin"
         SITE_OWNER = "SITE_OWNER", "Site Owner"
         CLINIC_OWNER = "CLINIC_OWNER", "Clinic Owner"
         DOCTOR = "DOCTOR", "Doctor"
