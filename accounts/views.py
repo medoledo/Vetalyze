@@ -680,22 +680,29 @@ class GlobalSubscriptionHistoryListView(generics.ListAPIView):
     def get_queryset(self):
         """
         Filters the queryset based on 'year' and 'month' query parameters.
-        Defaults to the current year and month if not provided.
+        - If no parameters are provided, defaults to the current year and month.
+        - If only 'year' is provided, it filters for that entire year.
+        - If only 'month' is provided, it filters for that month in the current year.
         """
-        try:
-            year = int(self.request.query_params.get('year', date.today().year))
-            month = int(self.request.query_params.get('month', date.today().month))
-        except (ValueError, TypeError):
-            today = date.today()
-            year = today.year
-            month = today.month
-
-        return SubscriptionHistory.objects.filter(
-            activation_date__year=year,
-            activation_date__month=month
-        ).select_related(
+        queryset = SubscriptionHistory.objects.select_related(
             'clinic', 'subscription_type', 'payment_method', 'activated_by'
         ).order_by('-activation_date')
+
+        today = date.today()
+        try:
+            year_str = self.request.query_params.get('year', None)
+            month_str = self.request.query_params.get('month', None)
+
+            year = int(year_str) if year_str else today.year
+            month = int(month_str) if month_str else (today.month if not year_str else None)
+
+            queryset = queryset.filter(activation_date__year=year)
+            if month:
+                queryset = queryset.filter(activation_date__month=month)
+        except (ValueError, TypeError):
+            return queryset.none() # Return empty queryset on invalid parameters
+
+        return queryset
 
     def list(self, request, *args, **kwargs):
         """

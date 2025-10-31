@@ -73,10 +73,7 @@ class Command(BaseCommand):
                     sub.status = SubscriptionHistory.Status.ACTIVE
                     sub.save(update_fields=['status'])
                     
-                    # Update clinic status to ACTIVE
-                    if sub.clinic.status != ClinicOwnerProfile.Status.ACTIVE:
-                        sub.clinic.status = ClinicOwnerProfile.Status.ACTIVE
-                        sub.clinic.save(update_fields=['status'])
+                    # Clinic status will automatically update (it's a computed property)
                     
                     activated_count += 1
                     logger.info(f"Activated subscription {sub.id} for clinic {sub.clinic.clinic_name}")
@@ -106,16 +103,7 @@ class Command(BaseCommand):
                     sub.status = SubscriptionHistory.Status.ENDED
                     sub.save(update_fields=['status'])
                     
-                    # Check if clinic has any other active or upcoming subscriptions
-                    has_active_or_upcoming = sub.clinic.subscription_history.filter(
-                        Q(status=SubscriptionHistory.Status.ACTIVE) | 
-                        Q(status=SubscriptionHistory.Status.UPCOMING)
-                    ).exists()
-                    
-                    # If no active or upcoming subscriptions, mark clinic as ENDED
-                    if not has_active_or_upcoming and sub.clinic.status != ClinicOwnerProfile.Status.SUSPENDED:
-                        sub.clinic.status = ClinicOwnerProfile.Status.ENDED
-                        sub.clinic.save(update_fields=['status'])
+                    # Clinic status will automatically update based on subscription history (it's a computed property)
                     
                     expired_count += 1
                     logger.info(f"Expired subscription {sub.id} for clinic {sub.clinic.clinic_name}")
