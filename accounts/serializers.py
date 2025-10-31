@@ -306,8 +306,9 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         Exclude `subscription_history` for list views to keep the payload light.
         """
         ret = super().to_representation(instance)
-        view = self.context.get('view')
-        if view and getattr(view, 'action', None) == 'list':
+        # When serializing a list, the serializer will have a `parent` ListSerializer.
+        # For a single object (detail view), `self.parent` will be None.
+        if getattr(self, 'parent', None) and isinstance(self.parent, serializers.ListSerializer):
             ret.pop('subscription_history', None)
         return ret
 

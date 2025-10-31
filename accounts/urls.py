@@ -9,6 +9,7 @@ from .views import (
     ClinicOwnerProfileListCreateView,
     ClinicOwnerProfileDetailView,
     ClinicOwnerProfileMeView,
+    DeactivateClinicView,
     ChangePasswordView,
     ManageSubscriptionStatusView,
     RefundSubscriptionView,
@@ -40,6 +41,7 @@ urlpatterns = [
     path('clinics/', ClinicOwnerProfileListCreateView.as_view(), name='clinic-list-create'),
     path('clinics/me/', ClinicOwnerProfileMeView.as_view(), name='clinic-me'),
     path('clinics/<int:pk>/', ClinicOwnerProfileDetailView.as_view(), name='clinic-detail'),
+    path('clinics/<int:pk>/deactivate/', DeactivateClinicView.as_view(), name='clinic-deactivate'),
     path('clinics/<int:pk>/change-password/', ChangePasswordView.as_view(), name='clinic-change-password'),
     
     # Clinic Subscription Management

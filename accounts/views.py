@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 from django.http import Http404
 from django.conf import settings
 from django.db import transaction, models as django_models
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Q
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework import generics, views, status
@@ -136,7 +136,7 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
         serializer.save(added_by=self.request.user)
 
 
-class ClinicOwnerProfileDetailView(generics.RetrieveUpdateAPIView):
+class ClinicOwnerProfileDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     - Site Owners can retrieve and update any clinic profile.
     - Clinic Owners can retrieve their own profile.
@@ -173,6 +173,43 @@ class ClinicOwnerProfileDetailView(generics.RetrieveUpdateAPIView):
             self.permission_denied(self.request, message='You do not have permission to edit this profile.')
         serializer.save()
 
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        """
+        Hard delete - Only for clinics with NO subscription history (INACTIVE status).
+        If clinic has any subscription history, reject the delete request.
+        """
+        instance = self.get_object()
+
+        # Check if clinic has any subscription history (only INACTIVE clinics with no history can be deleted)
+        if instance.subscription_history.exists():
+            return Response(
+                {
+                    'error': 'Cannot delete clinic with subscription history. Use the deactivate endpoint instead.',
+                    'detail': 'This clinic has subscription records and must be deactivated rather than deleted.'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Hard delete: Delete the clinic and associated user accounts
+        clinic_name = instance.clinic_name
+        username = instance.user.username if instance.user else 'N/A'
+        
+        # Delete associated doctor and receptionist profiles (and their user accounts due to CASCADE)
+        DoctorProfile.objects.filter(clinic_owner_profile=instance).delete()
+        ReceptionProfile.objects.filter(clinic_owner_profile=instance).delete()
+        
+        # Delete the clinic owner profile (will cascade delete the user)
+        instance.delete()
+        
+        logger.info(f"Clinic '{clinic_name}' (User: {username}) permanently deleted by {request.user.username}")
+
+        return Response(
+            {'message': 'Clinic has been permanently deleted.'},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
 
 class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
     """
@@ -183,6 +220,80 @@ class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user.clinic_owner_profile
+
+
+class DeactivateClinicView(views.APIView):
+    """
+    Soft delete endpoint - Deactivate a clinic (only for clinics with ENDED status).
+    Cannot deactivate clinics with ACTIVE, SUSPENDED, or INACTIVE status.
+    """
+    permission_classes = [IsSiteOwner]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        """
+        Deactivate a clinic by setting all user accounts to inactive.
+        Only works for clinics with ENDED subscription status.
+        """
+        try:
+            clinic = get_object_or_404(
+                ClinicOwnerProfile.objects.select_related('user'),
+                pk=pk
+            )
+        except Http404:
+            return Response(
+                {'error': 'Clinic not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check clinic status
+        clinic_status = clinic.status
+
+        # Only allow deactivation for ENDED status
+        if clinic_status != ClinicOwnerProfile.Status.ENDED:
+            return Response(
+                {
+                    'error': f'Cannot deactivate clinic with status: {clinic_status}',
+                    'detail': 'Only clinics with ENDED status can be deactivated. '
+                             'ACTIVE or SUSPENDED subscriptions must be ended first. '
+                             'INACTIVE clinics (no subscriptions) should be deleted instead.'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Deactivate the clinic owner's user account
+        if clinic.user:
+            clinic.user.is_active = False
+            clinic.user.save(update_fields=['is_active'])
+            logger.info(f"Deactivated user account: {clinic.user.username}")
+
+        # Deactivate all associated doctor user accounts
+        doctor_count = User.objects.filter(
+            doctor_profile__clinic_owner_profile=clinic
+        ).update(is_active=False)
+
+        # Deactivate all associated receptionist user accounts
+        reception_count = User.objects.filter(
+            reception_profile__clinic_owner_profile=clinic
+        ).update(is_active=False)
+
+        logger.info(
+            f"Clinic '{clinic.clinic_name}' deactivated by {request.user.username}. "
+            f"Deactivated {doctor_count} doctors and {reception_count} receptionists."
+        )
+
+        return Response(
+            {
+                'message': 'Clinic has been successfully deactivated.',
+                'deactivated_accounts': {
+                    'clinic_owner': 1,
+                    'doctors': doctor_count,
+                    'receptionists': reception_count,
+                    'total': 1 + doctor_count + reception_count
+                }
+            },
+            status=status.HTTP_200_OK
+        )
 
 
 class ChangePasswordView(views.APIView):
