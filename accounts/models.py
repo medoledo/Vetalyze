@@ -81,7 +81,7 @@ class ClinicOwnerProfile(models.Model):
         ACTIVE = "ACTIVE", _("Active")
         ENDED = "ENDED", _("Ended")
         SUSPENDED = "SUSPENDED", _("Suspended")
-        SOFT_DELETED = "SOFT_DELETED", _("Soft Deleted")
+        DEACTIVATED = "DEACTIVATED", _("Deactivated")
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -113,13 +113,19 @@ class ClinicOwnerProfile(models.Model):
         limit_choices_to={'role': 'SITE_OWNER'}
     )
     joined_date = models.DateField(auto_now_add=True)
+    is_deactivated = models.BooleanField(default=False, db_index=True, help_text="Indicates if a clinic has been soft-deleted.")
 
     @property
     def status(self):
         """
-        Dynamically determines the clinic's status based on the latest
-        subscription history record.
+        Dynamically determines the clinic's status.
+        - DEACTIVATED takes precedence over all other statuses.
+        - Otherwise, status is based on the latest subscription history.
         """
+        # Deactivated status is a permanent override until reactivated
+        if self.is_deactivated:
+            return self.Status.DEACTIVATED
+
         latest_subscription = self.subscription_history.order_by('-activation_date', '-pk').first()
 
         if not latest_subscription:

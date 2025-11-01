@@ -2,7 +2,8 @@
 from datetime import date, timedelta
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import Subquery, OuterRef, Prefetch
+from django.db import transaction
+from django.db.models import Subquery, OuterRef, Prefetch, Q
 from .models import User, Country, ClinicOwnerProfile, DoctorProfile, ReceptionProfile, SubscriptionType, PaymentMethod, SubscriptionHistory, UserSession
 
 
@@ -131,58 +132,92 @@ def reactivate_subscriptions(modeladmin, request, queryset):
 
 @admin.action(description='Refund selected subscriptions')
 def refund_subscriptions(modeladmin, request, queryset):
+    """Refund selected subscriptions. Clinic status will auto-update based on remaining subscriptions."""
     for sub in queryset.filter(status__in=[SubscriptionHistory.Status.ACTIVE, SubscriptionHistory.Status.SUSPENDED, SubscriptionHistory.Status.UPCOMING]):
         sub.status = SubscriptionHistory.Status.REFUNDED
         sub.comments = f"Refunded via admin action by {request.user.username}."
         sub.save()
-        if not sub.clinic.has_active_or_upcoming_subscription:
-            sub.clinic.status = ClinicOwnerProfile.Status.ENDED
-            sub.clinic.save()
+        # Note: clinic.status will automatically update (it's a computed property)
 
 
-class StatusListFilter(admin.SimpleListFilter):
-    """
-    Custom admin filter for the dynamic 'status' property on ClinicOwnerProfile.
-    """
-    title = 'status'
-    parameter_name = 'status'
+@admin.action(description='Deactivate selected clinics (soft delete)')
+def deactivate_clinics(modeladmin, request, queryset):
+    """Admin action to soft delete clinics with an ENDED status."""
+    from django.contrib import messages
+    updated_count = 0
+    skipped_count = 0
+    
+    for clinic in queryset:
+        if clinic.status == ClinicOwnerProfile.Status.ENDED and not clinic.is_deactivated:
+            with transaction.atomic():
+                clinic.is_deactivated = True
+                clinic.save(update_fields=['is_deactivated'])
+                
+                # Deactivate all associated users
+                User.objects.filter(
+                    Q(clinic_owner_profile=clinic) |
+                    Q(doctor_profile__clinic_owner_profile=clinic) |
+                    Q(reception_profile__clinic_owner_profile=clinic)
+                ).update(is_active=False)
+                updated_count += 1
+        else:
+            skipped_count += 1
+    
+    if updated_count > 0:
+        messages.success(request, f'Successfully deactivated {updated_count} clinic(s).')
+    if skipped_count > 0:
+        messages.warning(request, f'Skipped {skipped_count} clinic(s) - only ENDED clinics can be deactivated.')
 
-    def lookups(self, request, model_admin):
-        return ClinicOwnerProfile.Status.choices
-
-    def queryset(self, request, queryset):
-        value = self.value()
-        if value:
-            # This annotation logic must match the one in get_queryset
-            if value == ClinicOwnerProfile.Status.INACTIVE:
-                return queryset.filter(latest_status__isnull=True)
-            if value == ClinicOwnerProfile.Status.ENDED:
-                return queryset.filter(latest_status__in=[
-                    SubscriptionHistory.Status.ENDED,
-                    SubscriptionHistory.Status.REFUNDED,
-                    SubscriptionHistory.Status.UPCOMING
-                ])
-            return queryset.filter(latest_status=value)
-        return queryset
+@admin.action(description='Reactivate selected clinics')
+def reactivate_clinics(modeladmin, request, queryset):
+    """Admin action to reactivate soft-deleted clinics."""
+    from django.contrib import messages
+    updated_count = 0
+    skipped_count = 0
+    
+    for clinic in queryset:
+        if clinic.is_deactivated:
+            with transaction.atomic():
+                clinic.is_deactivated = False
+                clinic.save(update_fields=['is_deactivated'])
+                
+                # Reactivate all associated users
+                User.objects.filter(
+                    Q(clinic_owner_profile=clinic) |
+                    Q(doctor_profile__clinic_owner_profile=clinic) |
+                    Q(reception_profile__clinic_owner_profile=clinic)
+                ).update(is_active=True)
+                updated_count += 1
+        else:
+            skipped_count += 1
+    
+    if updated_count > 0:
+        messages.success(request, f'Successfully reactivated {updated_count} clinic(s).')
+    if skipped_count > 0:
+        messages.info(request, f'Skipped {skipped_count} clinic(s) - already active.')
 
 
 @admin.register(ClinicOwnerProfile)
 class ClinicOwnerProfileAdmin(admin.ModelAdmin):
-    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'display_status', 'current_plan', 'days_left')
-    list_filter = (StatusListFilter, 'country')
+    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan', 'days_left', 'is_deactivated')
+    list_filter = ('is_deactivated', 'country')
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
     readonly_fields = ('joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left', 'status')
+    actions = [deactivate_clinics, reactivate_clinics]
 
     def get_queryset(self, request):
         """Optimize the queryset to prevent N+1 queries."""
         qs = super().get_queryset(request).select_related('user', 'country')
 
-        # Annotate with the latest subscription status to be used by list_display and list_filter
-        latest_sub_status = SubscriptionHistory.objects.filter(
-            clinic=OuterRef('pk')
-        ).order_by('-activation_date', '-pk').values('status')[:1]
-        qs = qs.annotate(latest_status=Subquery(latest_sub_status))
+        # Prefetch the entire subscription history to allow the `status` property to work efficiently.
+        # The `status` property on the model is now the source of truth.
+        qs = qs.prefetch_related(
+            Prefetch(
+                'subscription_history',
+                queryset=SubscriptionHistory.objects.order_by('-activation_date', '-pk')
+            )
+        )
 
         # Prefetch the active subscription for calculating days_left and current_plan
         qs = qs.prefetch_related(
@@ -193,6 +228,24 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
             )
         )
         return qs
+
+    @admin.display(description='Status', ordering='is_deactivated')
+    def status(self, obj):
+        """Display the computed status property from the model with color coding."""
+        status_colors = {
+            'ACTIVE': '🟢',
+            'INACTIVE': '⚪',
+            'ENDED': '🔴',
+            'SUSPENDED': '🟡',
+            'DEACTIVATED': '⚫'
+        }
+        icon = status_colors.get(obj.status, '')
+        return f"{icon} {obj.status}"
+
+    @admin.display(description='Deactivated', boolean=True, ordering='is_deactivated')
+    def deactivated_status(self, obj):
+        """Display deactivation status as a boolean icon."""
+        return obj.is_deactivated
 
     def get_form(self, request, obj=None, **kwargs):
         """
@@ -213,21 +266,6 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
         """Display days left from the prefetched active subscription."""
         return obj.active_subscription.days_left if obj.active_subscription else None
     days_left.short_description = 'Days Left'
-
-    def display_status(self, obj):
-        """
-        Displays the clinic's status based on the annotated latest_status.
-        """
-        if not obj.latest_status:
-            return ClinicOwnerProfile.Status.INACTIVE
-        
-        status_map = {
-            SubscriptionHistory.Status.ACTIVE: ClinicOwnerProfile.Status.ACTIVE,
-            SubscriptionHistory.Status.SUSPENDED: ClinicOwnerProfile.Status.SUSPENDED,
-        }
-        return status_map.get(obj.latest_status, ClinicOwnerProfile.Status.ENDED)
-    display_status.short_description = 'Status'
-    display_status.admin_order_field = 'latest_status' # Allow sorting by status
 
 
 admin.site.register(User, CustomUserAdmin)

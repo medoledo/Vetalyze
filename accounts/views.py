@@ -122,7 +122,7 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
         'clinic_owner_name', 
         'user__username', 
         'owner_phone_number', 
-        'clinic_phone_number'
+        'clinic_phone_number',
     ]
 
 
@@ -224,11 +224,11 @@ class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
 
 class DeactivateClinicView(views.APIView):
     """
-    Soft delete endpoint - Deactivates a clinic (only for clinics with ENDED status).
-    This action is equivalent to a soft delete.
+    Soft delete endpoint - Deactivates a clinic (only for clinics with ENDED status)
+    by marking it as deactivated and making all associated user accounts inactive.
     """
     permission_classes = [IsSiteOwner]
-
+    
     @transaction.atomic
     def post(self, request, pk):
         """
@@ -246,25 +246,36 @@ class DeactivateClinicView(views.APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Check clinic status
-        clinic_status = clinic.status
+        # Check if already deactivated
+        if clinic.is_deactivated:
+            return Response(
+                {'error': 'Clinic is already deactivated.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Only allow deactivation for ENDED status
-        if clinic_status != ClinicOwnerProfile.Status.ENDED:
+        if clinic.status != ClinicOwnerProfile.Status.ENDED:
             return Response(
                 {
-                    'error': f'Cannot deactivate clinic with status: {clinic_status}',
+                    'error': f'Cannot deactivate clinic with status: {clinic.status}',
                     'detail': 'Only clinics with an ENDED status can be deactivated. '
                              'INACTIVE clinics (no subscriptions) should be deleted instead.'
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Mark the clinic as deactivated
+        clinic.is_deactivated = True
+        clinic.save(update_fields=['is_deactivated'])
+
         # Deactivate the clinic owner's user account
         if clinic.user:
             clinic.user.is_active = False
             clinic.user.save(update_fields=['is_active'])
             logger.info(f"Deactivated user account: {clinic.user.username}")
+        else:
+            # This case should ideally not happen for a valid profile
+            logger.warning(f"Clinic profile {clinic.pk} has no associated user to deactivate.")
 
         # Deactivate all associated doctor user accounts
         doctor_count = User.objects.filter(
@@ -277,13 +288,13 @@ class DeactivateClinicView(views.APIView):
         ).update(is_active=False)
 
         logger.info(
-            f"Clinic '{clinic.clinic_name}' deactivated by {request.user.username}. "
+            f"Soft deleted clinic '{clinic.clinic_name}' by {request.user.username}. "
             f"Deactivated {doctor_count} doctors and {reception_count} receptionists."
         )
 
         return Response(
             {
-                'message': 'Clinic has been successfully deactivated.',
+                'message': 'Clinic has been successfully deactivated (soft deleted).',
                 'deactivated_accounts': {
                     'clinic_owner': 1,
                     'doctors': doctor_count,
@@ -293,6 +304,70 @@ class DeactivateClinicView(views.APIView):
             },
             status=status.HTTP_200_OK
         )
+
+
+class DeactivatedClinicListView(generics.ListAPIView):
+    """
+    An endpoint for Site Owners to list all deactivated (soft-deleted) clinics.
+    """
+    permission_classes = [IsSiteOwner]
+    serializer_class = ClinicOwnerProfileSerializer
+    queryset = ClinicOwnerProfile.objects.filter(is_deactivated=True).order_by('-joined_date')
+    search_fields = ClinicOwnerProfileListCreateView.search_fields
+
+
+class ReactivateClinicView(views.APIView):
+    """
+    An endpoint for Site Owners to reactivate a deactivated (soft-deleted) clinic.
+    """
+    permission_classes = [IsSiteOwner]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        """
+        Reactivates a clinic by setting `is_deactivated` to False and reactivating all users.
+        """
+        try:
+            clinic = get_object_or_404(
+                ClinicOwnerProfile.objects.select_related('user'),
+                pk=pk
+            )
+        except Http404:
+            return Response({'error': 'Clinic not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not clinic.is_deactivated:
+            return Response(
+                {'error': 'Clinic is not deactivated.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Reactivate the clinic profile
+        clinic.is_deactivated = False
+        clinic.save(update_fields=['is_deactivated'])
+
+        # Reactivate the clinic owner's user account
+        if clinic.user:
+            clinic.user.is_active = True
+            clinic.user.save(update_fields=['is_active'])
+
+        # Reactivate associated staff accounts
+        doctor_count = User.objects.filter(doctor_profile__clinic_owner_profile=clinic).update(is_active=True)
+        reception_count = User.objects.filter(reception_profile__clinic_owner_profile=clinic).update(is_active=True)
+
+        logger.info(
+            f"Reactivated clinic '{clinic.clinic_name}' by {request.user.username}. "
+            f"Reactivated {doctor_count} doctors and {reception_count} receptionists."
+        )
+
+        return Response({
+            'message': 'Clinic has been successfully reactivated.',
+            'reactivated_accounts': {
+                'clinic_owner': 1,
+                'doctors': doctor_count,
+                'receptionists': reception_count,
+                'total': 1 + doctor_count + reception_count
+            }
+        }, status=status.HTTP_200_OK)
 
 
 class ChangePasswordView(views.APIView):
