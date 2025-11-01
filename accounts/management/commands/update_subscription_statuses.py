@@ -87,7 +87,7 @@ class Command(BaseCommand):
     @transaction.atomic
     def _expire_active_subscriptions(self, today):
         """
-        End ACTIVE subscriptions whose end_date has passed.
+        End ACTIVE subscriptions whose end_date has passed by creating a new ENDED record.
         """
         expired_subs = SubscriptionHistory.objects.select_for_update().filter(
             status=SubscriptionHistory.Status.ACTIVE,
@@ -99,14 +99,24 @@ class Command(BaseCommand):
         for sub in expired_subs:
             try:
                 with transaction.atomic():
-                    # Mark subscription as ENDED
-                    sub.status = SubscriptionHistory.Status.ENDED
-                    sub.save(update_fields=['status'])
+                    # Create a new record with ENDED status (preserves history)
+                    SubscriptionHistory.objects.create(
+                        subscription_group=sub.subscription_group,
+                        clinic=sub.clinic,
+                        subscription_type=sub.subscription_type,
+                        payment_method=sub.payment_method,
+                        amount_paid=sub.amount_paid,
+                        start_date=sub.start_date,
+                        end_date=sub.end_date,
+                        status=SubscriptionHistory.Status.ENDED,
+                        comments=f"Subscription expired on {sub.end_date}",
+                        activated_by=sub.activated_by
+                    )
                     
                     # Clinic status will automatically update based on subscription history (it's a computed property)
                     
                     expired_count += 1
-                    logger.info(f"Expired subscription {sub.id} for clinic {sub.clinic.clinic_name}")
+                    logger.info(f"Expired subscription {sub.id} for clinic {sub.clinic.clinic_name} - created new ENDED record")
                     
             except Exception as e:
                 logger.error(f"Failed to expire subscription {sub.id}: {str(e)}")
