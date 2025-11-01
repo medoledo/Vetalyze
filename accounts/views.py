@@ -439,6 +439,13 @@ class ManageSubscriptionStatusView(views.APIView):
     """
     permission_classes = [IsSiteOwner]
 
+    def _is_latest_subscription(self, subscription):
+        """Check if this subscription is the latest in its group."""
+        latest_id = SubscriptionHistory.objects.filter(
+            subscription_group=subscription.subscription_group
+        ).aggregate(max_id=django_models.Max('id'))['max_id']
+        return subscription.id == latest_id
+
     def post(self, request, *args, **kwargs):
         try:
             subscription = get_object_or_404(
@@ -456,6 +463,13 @@ class ManageSubscriptionStatusView(views.APIView):
         comment = request.data.get('comment', '').strip()
 
         # Validation
+        # Check if this is the latest subscription in the group
+        if not self._is_latest_subscription(subscription):
+            return Response(
+                {'error': 'Only the latest subscription in the group can be modified. This is an old record for historical reference only.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         if not action:
             return Response(
                 {'error': 'Action is required. Use "suspend" or "reactivate".'},
@@ -590,6 +604,13 @@ class RefundSubscriptionView(views.APIView):
     """
     permission_classes = [IsSiteOwner]
 
+    def _is_latest_subscription(self, subscription):
+        """Check if this subscription is the latest in its group."""
+        latest_id = SubscriptionHistory.objects.filter(
+            subscription_group=subscription.subscription_group
+        ).aggregate(max_id=django_models.Max('id'))['max_id']
+        return subscription.id == latest_id
+
     @transaction.atomic
     def post(self, request, *args, **kwargs):
         try:
@@ -605,6 +626,13 @@ class RefundSubscriptionView(views.APIView):
             )
         
         comment = request.data.get('comment', '').strip()
+
+        # Check if this is the latest subscription in the group
+        if not self._is_latest_subscription(subscription):
+            return Response(
+                {'error': 'Only the latest subscription in the group can be refunded. This is an old record for historical reference only.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         if not comment:
             return Response(
@@ -782,7 +810,7 @@ class GlobalSubscriptionHistoryListView(generics.ListAPIView):
         """
         Custom list method to group the global subscription history by subscription_group.
         """
-        queryset = self.get_queryset().order_by('subscription_group', '-activation_date')
+        queryset = self.get_queryset().order_by('subscription_group', '-activation_date', '-id')
 
         # Group records by the subscription_group UUID
         grouped_subscriptions = []
