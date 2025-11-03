@@ -88,6 +88,7 @@ class Command(BaseCommand):
     def _expire_active_subscriptions(self, today):
         """
         End ACTIVE subscriptions whose end_date has passed by creating a new ENDED record.
+        This preserves the full subscription history (e.g., ACTIVE -> SUSPENDED -> ACTIVE -> ENDED).
         """
         expired_subs = SubscriptionHistory.objects.select_for_update().filter(
             status=SubscriptionHistory.Status.ACTIVE,
@@ -99,7 +100,20 @@ class Command(BaseCommand):
         for sub in expired_subs:
             try:
                 with transaction.atomic():
-                    # Create a new record with ENDED status (preserves history)
+                    # Check if an ENDED record already exists for this subscription group and dates
+                    # This prevents duplicate ENDED records on subsequent cron runs
+                    already_ended = SubscriptionHistory.objects.filter(
+                        subscription_group=sub.subscription_group,
+                        start_date=sub.start_date,
+                        end_date=sub.end_date,
+                        status=SubscriptionHistory.Status.ENDED
+                    ).exists()
+                    
+                    if already_ended:
+                        logger.info(f"Subscription {sub.id} already has an ENDED record - skipping")
+                        continue
+                    
+                    # Create a new record with ENDED status (preserves full history)
                     SubscriptionHistory.objects.create(
                         subscription_group=sub.subscription_group,
                         clinic=sub.clinic,
@@ -116,7 +130,7 @@ class Command(BaseCommand):
                     # Clinic status will automatically update based on subscription history (it's a computed property)
                     
                     expired_count += 1
-                    logger.info(f"Expired subscription {sub.id} for clinic {sub.clinic.clinic_name} - created new ENDED record")
+                    logger.info(f"Created ENDED record for subscription {sub.id} (clinic: {sub.clinic.clinic_name})")
                     
             except Exception as e:
                 logger.error(f"Failed to expire subscription {sub.id}: {str(e)}")
