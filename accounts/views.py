@@ -104,17 +104,6 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
     - Site Owners can create a new clinic profile.
     """
     permission_classes = [IsSiteOwner]
-    queryset = ClinicOwnerProfile.objects.select_related(
-        'user', 'country'
-    ).prefetch_related(
-        django_models.Prefetch(
-            'subscription_history',
-            queryset=SubscriptionHistory.objects.select_related(
-                'subscription_type', 'payment_method', 'activated_by'
-            ).filter(status=SubscriptionHistory.Status.ACTIVE),
-            to_attr='_active_subscription_cached'
-        )
-    ).order_by('-joined_date')
     serializer_class = ClinicOwnerProfileSerializer
     filterset_class = ClinicOwnerProfileFilter
     search_fields = [
@@ -124,6 +113,27 @@ class ClinicOwnerProfileListCreateView(generics.ListCreateAPIView):
         'owner_phone_number', 
         'clinic_phone_number',
     ]
+
+    def get_queryset(self):
+        """
+        Prefetch related data to optimize performance.
+        - `_active_subscription_cached`: For `current_plan` and `days_left`.
+        - `_latest_subscription_cached`: For `latest_subscription_history_id`.
+        """
+        return ClinicOwnerProfile.objects.filter(is_deactivated=False).select_related(
+            'user', 'country'
+        ).prefetch_related(
+            django_models.Prefetch(
+                'subscription_history',
+                queryset=SubscriptionHistory.objects.filter(status=SubscriptionHistory.Status.ACTIVE),
+                to_attr='_active_subscription_cached'
+            ),
+            django_models.Prefetch(
+                'subscription_history',
+                queryset=SubscriptionHistory.objects.order_by('-activation_date', '-pk')[:1],
+                to_attr='_latest_subscription_cached'
+            )
+        ).order_by('-joined_date')
 
 
     def get_serializer_context(self):

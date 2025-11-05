@@ -279,6 +279,7 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
     added_by = serializers.StringRelatedField(read_only=True)
     subscription_history = SubscriptionHistorySerializer(many=True, read_only=True)
     days_left = serializers.SerializerMethodField()
+    latest_subscription_history_id = serializers.SerializerMethodField()
 
     country_id = serializers.PrimaryKeyRelatedField(
         queryset=Country.objects.all(), source='country', write_only=True
@@ -290,7 +291,8 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
             'clinic_id', 'user', 'country', 'country_id', 'clinic_owner_name',
             'clinic_name', 'owner_phone_number', 'clinic_phone_number', 'location',
             'facebook', 'website', 'instagram', 'tiktok', 'gmail', 'days_left',
-            'added_by', 'joined_date', 'status', 'current_plan', 'subscription_history'
+            'added_by', 'joined_date', 'status', 'current_plan', 'subscription_history',
+            'latest_subscription_history_id'
         ]
         read_only_fields = ['clinic_id', 'joined_date', 'added_by', 'current_plan', 'subscription_history', 'days_left']
 
@@ -299,6 +301,16 @@ class ClinicOwnerProfileSerializer(serializers.ModelSerializer):
         active_sub = obj.active_subscription
         if active_sub:
             return active_sub.days_left
+        return None
+
+    def get_latest_subscription_history_id(self, obj):
+        """
+        Returns the ID of the most recent subscription history record.
+        Relies on the `_latest_subscription_cached` attribute being prefetched in the view.
+        """
+        if hasattr(obj, '_latest_subscription_cached'):
+            latest_sub = obj._latest_subscription_cached[0] if obj._latest_subscription_cached else None
+            return latest_sub.id if latest_sub else None
         return None
 
     def to_representation(self, instance):

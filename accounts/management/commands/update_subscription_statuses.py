@@ -89,6 +89,7 @@ class Command(BaseCommand):
         """
         End ACTIVE subscriptions whose end_date has passed by creating a new ENDED record.
         This preserves the full subscription history (e.g., ACTIVE -> SUSPENDED -> ACTIVE -> ENDED).
+        Only processes subscriptions that haven't been marked as ended yet.
         """
         expired_subs = SubscriptionHistory.objects.select_for_update().filter(
             status=SubscriptionHistory.Status.ACTIVE,
@@ -100,20 +101,21 @@ class Command(BaseCommand):
         for sub in expired_subs:
             try:
                 with transaction.atomic():
-                    # Check if an ENDED record already exists for this subscription group and dates
-                    # This prevents duplicate ENDED records on subsequent cron runs
-                    already_ended = SubscriptionHistory.objects.filter(
+                    # Check if an ENDED record already exists for this subscription group
+                    # We check the entire group to see if it's been processed, not just exact dates
+                    group_ended = SubscriptionHistory.objects.filter(
                         subscription_group=sub.subscription_group,
-                        start_date=sub.start_date,
-                        end_date=sub.end_date,
-                        status=SubscriptionHistory.Status.ENDED
+                        status=SubscriptionHistory.Status.ENDED,
+                        # Only check for ENDED records created by the system (has expiration comment)
+                        comments__icontains='Subscription expired'
                     ).exists()
                     
-                    if already_ended:
-                        logger.info(f"Subscription {sub.id} already has an ENDED record - skipping")
+                    if group_ended:
+                        logger.info(f"Subscription group {sub.subscription_group} already processed - skipping subscription {sub.id}")
                         continue
                     
                     # Create a new record with ENDED status (preserves full history)
+                    # The original ACTIVE record remains untouched
                     SubscriptionHistory.objects.create(
                         subscription_group=sub.subscription_group,
                         clinic=sub.clinic,
@@ -124,7 +126,9 @@ class Command(BaseCommand):
                         end_date=sub.end_date,
                         status=SubscriptionHistory.Status.ENDED,
                         comments=f"Subscription expired on {sub.end_date}",
-                        activated_by=sub.activated_by
+                        activated_by=sub.activated_by,
+                        extra_accounts_number=sub.extra_accounts_number,
+                        ref_number=sub.ref_number
                     )
                     
                     # Clinic status will automatically update based on subscription history (it's a computed property)

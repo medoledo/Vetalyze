@@ -199,11 +199,11 @@ def reactivate_clinics(modeladmin, request, queryset):
 
 @admin.register(ClinicOwnerProfile)
 class ClinicOwnerProfileAdmin(admin.ModelAdmin):
-    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan', 'days_left', 'is_deactivated')
+    list_display = ('clinic_name', 'clinic_owner_name', 'country', 'status', 'current_plan', 'days_left', 'is_deactivated', 'latest_subscription_history_id')
     list_filter = ('is_deactivated', 'country')
     search_fields = ('clinic_name', 'clinic_owner_name', 'user__username')
     inlines = [SubscriptionHistoryInline]
-    readonly_fields = ('joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left', 'status')
+    readonly_fields = ('joined_date', 'added_by', 'active_subscription', 'current_plan', 'days_left', 'status', 'latest_subscription_history_id')
     actions = [deactivate_clinics, reactivate_clinics]
 
     def get_queryset(self, request):
@@ -266,6 +266,13 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
         """Display days left from the prefetched active subscription."""
         return obj.active_subscription.days_left if obj.active_subscription else None
     days_left.short_description = 'Days Left'
+
+    @admin.display(description='Latest Sub History ID')
+    def latest_subscription_history_id(self, obj):
+        """Returns the ID of the most recent subscription history record."""
+        # The queryset is prefetched and ordered, so the first one is the latest.
+        latest_sub = obj.subscription_history.first()
+        return latest_sub.id if latest_sub else None
 
 
 admin.site.register(User, CustomUserAdmin)
