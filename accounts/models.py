@@ -163,6 +163,19 @@ class ClinicOwnerProfile(models.Model):
         """Property to check if the clinic's status is Active."""
         return self.status == self.Status.ACTIVE
 
+    def delete(self, *args, **kwargs):
+        """
+        Override delete to ensure the associated User is also deleted.
+        This fixes the issue where deleting a profile from Django admin
+        leaves the User object in the database.
+        """
+        user = self.user
+        # Delete the profile first
+        super().delete(*args, **kwargs)
+        # Then delete the user if it still exists
+        if user and user.pk:
+            user.delete()
+    
     def __str__(self):
         return f"{self.clinic_owner_name} - {self.clinic_name}"
 
@@ -194,6 +207,19 @@ class DoctorProfile(models.Model):
             models.Index(fields=['clinic_owner_profile', 'is_active']),
         ]
 
+    def delete(self, *args, **kwargs):
+        """
+        Override delete to ensure the associated User is also deleted.
+        This fixes the issue where deleting a profile from Django admin
+        leaves the User object in the database.
+        """
+        user = self.user
+        # Delete the profile first
+        super().delete(*args, **kwargs)
+        # Then delete the user if it still exists
+        if user and user.pk:
+            user.delete()
+
     def __str__(self):
         return self.full_name
 
@@ -224,6 +250,19 @@ class ReceptionProfile(models.Model):
         indexes = [
             models.Index(fields=['clinic_owner_profile', 'is_active']),
         ]
+
+    def delete(self, *args, **kwargs):
+        """
+        Override delete to ensure the associated User is also deleted.
+        This fixes the issue where deleting a profile from Django admin
+        leaves the User object in the database.
+        """
+        user = self.user
+        # Delete the profile first
+        super().delete(*args, **kwargs)
+        # Then delete the user if it still exists
+        if user and user.pk:
+            user.delete()
 
     def __str__(self):
         return self.full_name

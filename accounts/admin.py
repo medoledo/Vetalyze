@@ -273,11 +273,62 @@ class ClinicOwnerProfileAdmin(admin.ModelAdmin):
         # The queryset is prefetched and ordered, so the first one is the latest.
         latest_sub = obj.subscription_history.first()
         return latest_sub.id if latest_sub else None
+    
+    def delete_model(self, request, obj):
+        """
+        Ensure the delete() method on the model is called, which will also delete the User.
+        """
+        obj.delete()
+    
+    def delete_queryset(self, request, queryset):
+        """
+        Ensure the delete() method is called for bulk deletions.
+        """
+        for obj in queryset:
+            obj.delete()
 
 
 admin.site.register(User, CustomUserAdmin)
-admin.site.register(DoctorProfile)
-admin.site.register(ReceptionProfile)
+
+@admin.register(DoctorProfile)
+class DoctorProfileAdmin(admin.ModelAdmin):
+    list_display = ('full_name', 'clinic_owner_profile', 'phone_number', 'joined_date', 'is_active')
+    list_filter = ('is_active', 'clinic_owner_profile')
+    search_fields = ('full_name', 'user__username', 'phone_number')
+    readonly_fields = ('joined_date',)
+    
+    def delete_model(self, request, obj):
+        """
+        Ensure the delete() method on the model is called, which will also delete the User.
+        """
+        obj.delete()
+    
+    def delete_queryset(self, request, queryset):
+        """
+        Ensure the delete() method is called for bulk deletions.
+        """
+        for obj in queryset:
+            obj.delete()
+
+@admin.register(ReceptionProfile)
+class ReceptionProfileAdmin(admin.ModelAdmin):
+    list_display = ('full_name', 'clinic_owner_profile', 'phone_number', 'joined_date', 'is_active')
+    list_filter = ('is_active', 'clinic_owner_profile')
+    search_fields = ('full_name', 'user__username', 'phone_number')
+    readonly_fields = ('joined_date',)
+    
+    def delete_model(self, request, obj):
+        """
+        Ensure the delete() method on the model is called, which will also delete the User.
+        """
+        obj.delete()
+    
+    def delete_queryset(self, request, queryset):
+        """
+        Ensure the delete() method is called for bulk deletions.
+        """
+        for obj in queryset:
+            obj.delete()
 
 @admin.register(SubscriptionHistory)
 class SubscriptionHistoryAdmin(admin.ModelAdmin):
