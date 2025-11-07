@@ -232,6 +232,249 @@ class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
         return self.request.user.clinic_owner_profile
 
 
+class ClinicReportView(views.APIView):
+    """
+    Comprehensive report endpoint for a specific clinic.
+    Returns detailed analytics including revenue, subscription metrics, and history.
+    Only accessible by Site Owners.
+    """
+    permission_classes = [IsSiteOwner]
+
+    def get(self, request, pk):
+        """
+        Generate a comprehensive report for a clinic including:
+        - Total revenue generated
+        - Total days subscribed
+        - Most frequent subscription plan
+        - Complete subscription history
+        - Clinic status and details
+        - Staff metrics
+        - All relevant analytics
+        """
+        try:
+            clinic = get_object_or_404(
+                ClinicOwnerProfile.objects.select_related('user', 'country', 'added_by'),
+                pk=pk
+            )
+        except Http404:
+            return Response(
+                {'error': 'Clinic not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Get all subscription history for this clinic
+        subscriptions = SubscriptionHistory.objects.filter(
+            clinic=clinic
+        ).select_related(
+            'subscription_type', 'payment_method', 'activated_by'
+        ).order_by('subscription_group', '-activation_date')
+
+        # ==================== FINANCIAL ANALYTICS ====================
+        
+        # Total revenue from all subscriptions
+        total_revenue = sum(sub.amount_paid for sub in subscriptions)
+        
+        # Revenue by status
+        revenue_by_status = {}
+        for sub_status in SubscriptionHistory.Status:
+            revenue = sum(
+                sub.amount_paid for sub in subscriptions 
+                if sub.status == sub_status
+            )
+            if revenue > 0:
+                revenue_by_status[sub_status.label] = float(revenue)
+        
+        # Revenue by subscription type
+        revenue_by_plan = {}
+        for sub in subscriptions:
+            plan_name = sub.subscription_type.name
+            revenue_by_plan[plan_name] = revenue_by_plan.get(plan_name, 0) + float(sub.amount_paid)
+
+        # ==================== SUBSCRIPTION ANALYTICS ====================
+        
+        # Total days subscribed (sum of all subscription durations)
+        total_days_subscribed = 0
+        active_days = 0
+        ended_days = 0
+        suspended_days = 0
+        
+        for sub in subscriptions:
+            duration = (sub.end_date - sub.start_date).days
+            total_days_subscribed += duration
+            
+            if sub.status == SubscriptionHistory.Status.ACTIVE:
+                active_days += duration
+            elif sub.status == SubscriptionHistory.Status.ENDED:
+                ended_days += duration
+            elif sub.status == SubscriptionHistory.Status.SUSPENDED:
+                suspended_days += duration
+        
+        # Most frequent subscription plan
+        plan_frequency = {}
+        for sub in subscriptions:
+            plan_name = sub.subscription_type.name
+            plan_frequency[plan_name] = plan_frequency.get(plan_name, 0) + 1
+        
+        most_frequent_plan = None
+        most_frequent_count = 0
+        if plan_frequency:
+            most_frequent_plan = max(plan_frequency, key=plan_frequency.get)
+            most_frequent_count = plan_frequency[most_frequent_plan]
+        
+        # Subscription counts by status
+        subscription_counts = {}
+        for sub_status in SubscriptionHistory.Status:
+            count = sum(1 for sub in subscriptions if sub.status == sub_status)
+            if count > 0:
+                subscription_counts[sub_status.label] = count
+        
+        # Current active subscription details
+        active_subscription = clinic.active_subscription
+        current_subscription_info = None
+        if active_subscription:
+            current_subscription_info = {
+                'id': active_subscription.id,
+                'subscription_type': active_subscription.subscription_type.name,
+                'start_date': active_subscription.start_date,
+                'end_date': active_subscription.end_date,
+                'days_left': active_subscription.days_left,
+                'amount_paid': float(active_subscription.amount_paid),
+                'payment_method': active_subscription.payment_method.name,
+            }
+        
+        # ==================== SUBSCRIPTION HISTORY (GROUPED) ====================
+        
+        grouped_subscriptions = []
+        for key, group in groupby(subscriptions, key=lambda x: x.subscription_group):
+            group_list = list(group)
+            serializer = SubscriptionHistorySerializer(group_list, many=True)
+            
+            # Remove subscription_group from individual items to avoid redundancy
+            history_items = []
+            for item in serializer.data:
+                item_copy = dict(item)
+                item_copy.pop('subscription_group', None)
+                history_items.append(item_copy)
+            
+            grouped_subscriptions.append({
+                'subscription_group': key,
+                'history': history_items
+            })
+        
+        # Sort by most recent activation date
+        grouped_subscriptions.sort(
+            key=lambda g: g['history'][0]['activation_date'], reverse=True
+        )
+        
+        # ==================== STAFF ANALYTICS ====================
+        
+        # Count of doctors and receptionists
+        total_doctors = DoctorProfile.objects.filter(clinic_owner_profile=clinic).count()
+        active_doctors = DoctorProfile.objects.filter(clinic_owner_profile=clinic, is_active=True).count()
+        inactive_doctors = total_doctors - active_doctors
+        
+        total_receptionists = ReceptionProfile.objects.filter(clinic_owner_profile=clinic).count()
+        active_receptionists = ReceptionProfile.objects.filter(clinic_owner_profile=clinic, is_active=True).count()
+        inactive_receptionists = total_receptionists - active_receptionists
+        
+        total_staff = total_doctors + total_receptionists
+        active_staff = active_doctors + active_receptionists
+        
+        # ==================== TIME ANALYTICS ====================
+        
+        # Days since joining
+        days_since_joined = (date.today() - clinic.joined_date).days
+        
+        # First and last subscription dates
+        first_subscription_date = None
+        last_subscription_date = None
+        if subscriptions:
+            first_subscription_date = min(sub.activation_date for sub in subscriptions)
+            last_subscription_date = max(sub.activation_date for sub in subscriptions)
+        
+        # ==================== CLINIC DETAILS ====================
+        
+        clinic_details = {
+            'clinic_id': clinic.pk,
+            'clinic_name': clinic.clinic_name,
+            'clinic_owner_name': clinic.clinic_owner_name,
+            'username': clinic.user.username,
+            'status': clinic.status,
+            'is_deactivated': clinic.is_deactivated,
+            'joined_date': clinic.joined_date,
+            'days_since_joined': days_since_joined,
+            'country': {
+                'id': clinic.country.id,
+                'name': clinic.country.name,
+            },
+            'contact_info': {
+                'owner_phone_number': clinic.owner_phone_number,
+                'clinic_phone_number': clinic.clinic_phone_number,
+                'location': clinic.location,
+                'gmail': clinic.gmail,
+                'facebook': clinic.facebook,
+                'website': clinic.website,
+                'instagram': clinic.instagram,
+                'tiktok': clinic.tiktok,
+            },
+            'added_by': {
+                'id': clinic.added_by.id if clinic.added_by else None,
+                'username': clinic.added_by.username if clinic.added_by else None,
+            } if clinic.added_by else None,
+        }
+        
+        # ==================== COMPILE FINAL REPORT ====================
+        
+        report = {
+            'clinic_details': clinic_details,
+            
+            'financial_summary': {
+                'total_revenue': float(total_revenue),
+                'revenue_by_status': revenue_by_status,
+                'revenue_by_plan': revenue_by_plan,
+                'average_subscription_value': float(total_revenue / len(subscriptions)) if subscriptions else 0,
+            },
+            
+            'subscription_summary': {
+                'total_subscriptions': len(subscriptions),
+                'subscription_counts_by_status': subscription_counts,
+                'total_days_subscribed': total_days_subscribed,
+                'active_days': active_days,
+                'ended_days': ended_days,
+                'suspended_days': suspended_days,
+                'most_frequent_plan': {
+                    'name': most_frequent_plan,
+                    'count': most_frequent_count,
+                } if most_frequent_plan else None,
+                'plan_frequency': plan_frequency,
+                'current_active_subscription': current_subscription_info,
+                'first_subscription_date': first_subscription_date,
+                'last_subscription_date': last_subscription_date,
+            },
+            
+            'staff_summary': {
+                'total_staff': total_staff,
+                'active_staff': active_staff,
+                'doctors': {
+                    'total': total_doctors,
+                    'active': active_doctors,
+                    'inactive': inactive_doctors,
+                },
+                'receptionists': {
+                    'total': total_receptionists,
+                    'active': active_receptionists,
+                    'inactive': inactive_receptionists,
+                },
+            },
+            
+            'subscription_history': grouped_subscriptions,
+        }
+        
+        logger.info(f"Generated report for clinic {clinic.clinic_name} (ID: {clinic.pk}) by {request.user.username}")
+        
+        return Response(report, status=status.HTTP_200_OK)
+
+
 class DeactivateClinicView(views.APIView):
     """
     Soft delete endpoint - Deactivates a clinic (only for clinics with ENDED status)
