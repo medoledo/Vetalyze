@@ -736,8 +736,8 @@ class SubscriptionHistoryListCreateView(generics.ListCreateAPIView):
         return context
 
     def perform_create(self, serializer):
-        # The serializer's `create` method now handles all the logic,
-        # including setting the clinic status and deactivating old subscriptions.
+        # The serializer's `create` method handles subscription creation.
+        # Note: Old subscription records are NOT modified (history is immutable).
         serializer.save()
 
     def list(self, request, *args, **kwargs):

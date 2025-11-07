@@ -451,19 +451,16 @@ class CreateSubscriptionHistorySerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """
         Create a new subscription with atomic transaction to ensure data integrity.
+        
+        Note: Subscription history is immutable. Old ACTIVE subscriptions will naturally
+        transition to ENDED when their end_date passes (handled by the 
+        update_subscription_statuses management command). We do NOT modify old records here.
         """
         clinic_profile = self.context['clinic_profile']
         activated_by_user = self.context['request'].user
 
         try:
-            # If the new subscription starts today, end any currently active subscription
-            if validated_data['start_date'] <= date.today():
-                SubscriptionHistory.objects.filter(
-                    clinic=clinic_profile,
-                    status=SubscriptionHistory.Status.ACTIVE
-                ).update(status=SubscriptionHistory.Status.ENDED)
-
-            # Create the new subscription
+            # Create the new subscription with a new subscription_group UUID
             subscription = SubscriptionHistory.objects.create(
                 clinic=clinic_profile,
                 activated_by=activated_by_user,
