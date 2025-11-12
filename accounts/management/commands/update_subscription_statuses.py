@@ -52,6 +52,7 @@ class Command(BaseCommand):
     def _activate_upcoming_subscriptions(self, today):
         """
         Activate UPCOMING subscriptions whose start_date is today or earlier.
+        Creates new ENDED records for any currently ACTIVE subscriptions (preserves history).
         """
         upcoming_subs = SubscriptionHistory.objects.select_for_update().filter(
             status=SubscriptionHistory.Status.UPCOMING,
@@ -63,11 +64,36 @@ class Command(BaseCommand):
         for sub in upcoming_subs:
             try:
                 with transaction.atomic():
-                    # End any currently active subscriptions for the same clinic
-                    SubscriptionHistory.objects.filter(
+                    # Find any currently active subscriptions for the same clinic
+                    active_subs = SubscriptionHistory.objects.filter(
                         clinic=sub.clinic,
                         status=SubscriptionHistory.Status.ACTIVE
-                    ).update(status=SubscriptionHistory.Status.ENDED)
+                    ).select_related('subscription_type', 'payment_method', 'activated_by')
+                    
+                    # Create new ENDED records for each active subscription (preserves history)
+                    for active_sub in active_subs:
+                        # Check if this subscription group already has an ENDED record to avoid duplicates
+                        already_ended = SubscriptionHistory.objects.filter(
+                            subscription_group=active_sub.subscription_group,
+                            status=SubscriptionHistory.Status.ENDED
+                        ).exists()
+                        
+                        if already_ended:
+                            logger.info(f"Subscription group {active_sub.subscription_group} already has ENDED record - skipping")
+                            continue
+                        
+                        SubscriptionHistory.objects.create(
+                            subscription_group=active_sub.subscription_group,
+                            clinic=active_sub.clinic,
+                            subscription_type=active_sub.subscription_type,
+                            payment_method=active_sub.payment_method,
+                            amount_paid=active_sub.amount_paid,
+                            start_date=active_sub.start_date,
+                            end_date=active_sub.end_date,
+                            status=SubscriptionHistory.Status.ENDED,
+                            comments=f"Ended by upcoming subscription activation on {today}",
+                            activated_by=active_sub.activated_by
+                        )
                     
                     # Activate the new subscription
                     sub.status = SubscriptionHistory.Status.ACTIVE
@@ -102,16 +128,14 @@ class Command(BaseCommand):
             try:
                 with transaction.atomic():
                     # Check if an ENDED record already exists for this subscription group
-                    # We check the entire group to see if it's been processed, not just exact dates
+                    # This prevents duplicate ENDED records from multiple task runs or if already ended by activation
                     group_ended = SubscriptionHistory.objects.filter(
                         subscription_group=sub.subscription_group,
-                        status=SubscriptionHistory.Status.ENDED,
-                        # Only check for ENDED records created by the system (has expiration comment)
-                        comments__icontains='Subscription expired'
+                        status=SubscriptionHistory.Status.ENDED
                     ).exists()
                     
                     if group_ended:
-                        logger.info(f"Subscription group {sub.subscription_group} already processed - skipping subscription {sub.id}")
+                        logger.info(f"Subscription group {sub.subscription_group} already has ENDED record - skipping subscription {sub.id}")
                         continue
                     
                     # Create a new record with ENDED status (preserves full history)
