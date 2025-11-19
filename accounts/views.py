@@ -235,7 +235,7 @@ class ClinicOwnerProfileMeView(generics.RetrieveAPIView):
 class ClinicReportView(views.APIView):
     """
     Comprehensive report endpoint for a specific clinic.
-    Returns detailed analytics including revenue, subscription metrics, and history.
+    Returns detailed analytics including revenue, subscription metrics, and staff data.
     Only accessible by Site Owners.
     """
     permission_classes = [IsSiteOwner]
@@ -246,7 +246,6 @@ class ClinicReportView(views.APIView):
         - Total revenue generated
         - Total days subscribed
         - Most frequent subscription plan
-        - Complete subscription history
         - Clinic status and details
         - Staff metrics
         - All relevant analytics
@@ -341,30 +340,6 @@ class ClinicReportView(views.APIView):
                 'amount_paid': float(active_subscription.amount_paid),
                 'payment_method': active_subscription.payment_method.name,
             }
-        
-        # ==================== SUBSCRIPTION HISTORY (GROUPED) ====================
-        
-        grouped_subscriptions = []
-        for key, group in groupby(subscriptions, key=lambda x: x.subscription_group):
-            group_list = list(group)
-            serializer = SubscriptionHistorySerializer(group_list, many=True)
-            
-            # Remove subscription_group from individual items to avoid redundancy
-            history_items = []
-            for item in serializer.data:
-                item_copy = dict(item)
-                item_copy.pop('subscription_group', None)
-                history_items.append(item_copy)
-            
-            grouped_subscriptions.append({
-                'subscription_group': key,
-                'history': history_items
-            })
-        
-        # Sort by most recent activation date
-        grouped_subscriptions.sort(
-            key=lambda g: g['history'][0]['activation_date'], reverse=True
-        )
         
         # ==================== STAFF ANALYTICS ====================
         
@@ -466,8 +441,6 @@ class ClinicReportView(views.APIView):
                     'inactive': inactive_receptionists,
                 },
             },
-            
-            'subscription_history': grouped_subscriptions,
         }
         
         logger.info(f"Generated report for clinic {clinic.clinic_name} (ID: {clinic.pk}) by {request.user.username}")
